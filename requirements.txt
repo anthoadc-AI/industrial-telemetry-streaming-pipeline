@@ -3,3 +3,5 @@
 #   python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
 PyYAML==6.0.3
 paho-mqtt==2.1.0
+confluent-kafka[avro,schemaregistry]==2.15.1
+fastavro==1.12.2
