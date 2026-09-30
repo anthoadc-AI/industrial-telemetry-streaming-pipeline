@@ -1,0 +1,105 @@
+# Synthetic plant definition: a small fleet of rotating assets and the
+# sensor channels they report. Everything generated from this file is
+# synthetic; no value describes a real machine.
+#
+# Units: SI, except vibration in mm/s (velocity RMS, the usual unit for
+# casing vibration on rotating machinery) and speed in rpm. The unit is
+# part of every channel name, so a value never travels without it.
+
+sample_interval_s: 1.0
+ambient_temperature_c: 25.0
+
+channels:
+  bearing_temperature_c:
+    unit: degC
+    description: Drive-end bearing housing temperature.
+  vibration_rms_mm_s:
+    unit: mm/s
+    description: Casing vibration, velocity RMS.
+  motor_current_a:
+    unit: A
+    description: Motor phase current, RMS.
+  speed_rpm:
+    unit: rpm
+    description: Shaft speed.
+
+# Per-asset model parameters. The simulator documents each model; in short:
+#   load        base_load + amplitude * sin(2 pi t / period) + noise, per unit
+#   speed       synchronous_speed * (1 - rated_slip * load)
+#   current     rated_current * (no_load_fraction + (1 - no_load_fraction) * load)
+#   temperature first-order lag toward ambient + rise_at_full_load * load
+#   vibration   baseline + load_coefficient * load
+# Every channel adds Gaussian noise with the stated standard deviation.
+assets:
+  - id: motor-01
+    type: motor
+    description: Conveyor drive motor.
+    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]
+    load: {base: 0.75, amplitude: 0.10, period_s: 900, noise_std: 0.01}
+    electrical: {synchronous_speed_rpm: 1500, rated_slip: 0.020, rated_current_a: 55.0, no_load_fraction: 0.35}
+    thermal: {rise_at_full_load_c: 40.0, time_constant_s: 600}
+    vibration: {baseline_mm_s: 1.2, load_coefficient_mm_s: 0.8}
+    noise_std: {bearing_temperature_c: 0.2, vibration_rms_mm_s: 0.08, motor_current_a: 0.4, speed_rpm: 1.0}
+
+  - id: motor-02
+    type: motor
+    description: Mixer drive motor.
+    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]
+    load: {base: 0.60, amplitude: 0.15, period_s: 600, noise_std: 0.01}
+    electrical: {synchronous_speed_rpm: 1500, rated_slip: 0.025, rated_current_a: 40.0, no_load_fraction: 0.35}
+    thermal: {rise_at_full_load_c: 38.0, time_constant_s: 540}
+    vibration: {baseline_mm_s: 1.0, load_coefficient_mm_s: 0.7}
+    noise_std: {bearing_temperature_c: 0.2, vibration_rms_mm_s: 0.08, motor_current_a: 0.3, speed_rpm: 1.0}
+
+  - id: pump-01
+    type: pump
+    description: Cooling water circulation pump.
+    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]
+    load: {base: 0.80, amplitude: 0.05, period_s: 1200, noise_std: 0.01}
+    electrical: {synchronous_speed_rpm: 3000, rated_slip: 0.015, rated_current_a: 30.0, no_load_fraction: 0.30}
+    thermal: {rise_at_full_load_c: 35.0, time_constant_s: 480}
+    vibration: {baseline_mm_s: 1.8, load_coefficient_mm_s: 1.0}
+    noise_std: {bearing_temperature_c: 0.2, vibration_rms_mm_s: 0.10, motor_current_a: 0.25, speed_rpm: 2.0}
+
+  - id: pump-02
+    type: pump
+    description: Process water transfer pump, with slow bearing wear.
+    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]
+    load: {base: 0.80, amplitude: 0.05, period_s: 1200, noise_std: 0.01}
+    electrical: {synchronous_speed_rpm: 3000, rated_slip: 0.015, rated_current_a: 30.0, no_load_fraction: 0.30}
+    thermal: {rise_at_full_load_c: 35.0, time_constant_s: 480}
+    vibration: {baseline_mm_s: 1.8, load_coefficient_mm_s: 1.0}
+    noise_std: {bearing_temperature_c: 0.2, vibration_rms_mm_s: 0.10, motor_current_a: 0.25, speed_rpm: 2.0}
+    # Linear drift per hour of run time, added to the channel value.
+    degradation: {bearing_temperature_c: 1.5, vibration_rms_mm_s: 0.6}
+
+  - id: compressor-01
+    type: compressor
+    description: Plant air screw compressor.
+    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]
+    load: {base: 0.85, amplitude: 0.10, period_s: 300, noise_std: 0.02}
+    electrical: {synchronous_speed_rpm: 1500, rated_slip: 0.018, rated_current_a: 120.0, no_load_fraction: 0.30}
+    thermal: {rise_at_full_load_c: 45.0, time_constant_s: 900}
+    vibration: {baseline_mm_s: 2.2, load_coefficient_mm_s: 1.2}
+    noise_std: {bearing_temperature_c: 0.25, vibration_rms_mm_s: 0.12, motor_current_a: 0.8, speed_rpm: 1.0}
+
+# Injectable fault modes. Each adds an offset to one channel from its start
+# time: "step" at once, "ramp" linearly over ramp_s, then held.
+faults:
+  bearing_overheating:
+    channel: bearing_temperature_c
+    kind: ramp
+    magnitude: 45.0
+    ramp_s: 180
+    description: Local frictional heating at a failing bearing.
+  imbalance:
+    channel: vibration_rms_mm_s
+    kind: step
+    magnitude: 4.0
+    ramp_s: 0
+    description: Rotor imbalance, such as a lost balance weight.
+
+# Faults injected on every run, in seconds from simulator start. The
+# simulator's --fault flag adds to this list. Example:
+#   - {asset: pump-01, mode: imbalance, start_s: 60}
+fault_schedule: []

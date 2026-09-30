@@ -1,0 +1,48 @@
+# Alarm thresholds for the condition-monitoring pipeline.
+#
+# The values are illustrative defaults chosen for the synthetic data in
+# telemetry.yaml: normal operation stays below every warning level, and each
+# injected fault mode crosses at least one. They are not derived from any
+# real machine or published standard.
+#
+# Semantics, for direction "high" (the only direction used here):
+#   - An alarm is raised at a severity when the value is at or above that
+#     threshold for persistence_samples consecutive samples.
+#   - It clears when the value falls below (threshold - hysteresis) for
+#     persistence_samples consecutive samples.
+# Hysteresis is in the channel's own unit.
+#
+# speed_rpm is not alarmed: under the load model it only moves with load.
+
+channels:
+  bearing_temperature_c:
+    direction: high
+    warning: 80.0
+    critical: 95.0
+    hysteresis: 3.0
+    persistence_samples: 3
+  vibration_rms_mm_s:
+    direction: high
+    warning: 4.5
+    critical: 7.1
+    hysteresis: 0.3
+    persistence_samples: 5
+  motor_current_a:
+    # Current depends on each motor's rating, so the thresholds are set per
+    # asset below: warning at 105 % and critical at 120 % of rated current.
+    direction: high
+    hysteresis: 1.0
+    persistence_samples: 5
+
+# Per-asset values replace the channel defaults above, field by field.
+asset_overrides:
+  motor-01:
+    motor_current_a: {warning: 57.75, critical: 66.0}
+  motor-02:
+    motor_current_a: {warning: 42.0, critical: 48.0}
+  pump-01:
+    motor_current_a: {warning: 31.5, critical: 36.0}
+  pump-02:
+    motor_current_a: {warning: 31.5, critical: 36.0}
+  compressor-01:
+    motor_current_a: {warning: 126.0, critical: 144.0}
