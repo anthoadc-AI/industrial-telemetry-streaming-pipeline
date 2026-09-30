@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "Alarm",
+  "namespace": "industrial_telemetry",
+  "doc": "An alarm raise or clear event produced by the alarm consumer (Phase 2). Version 1. Derived from synthetic data.",
+  "fields": [
+    {"name": "alarm_id", "type": "string", "doc": "Identifier shared by the RAISED event and the CLEARED event that closes it."},
+    {"name": "asset_id", "type": "string", "doc": "Asset identifier; also the Kafka message key."},
+    {"name": "channel", "type": "string", "doc": "Telemetry field the alarm applies to, for example bearing_temperature_c."},
+    {"name": "severity", "type": {"type": "enum", "name": "AlarmSeverity", "symbols": ["WARNING", "CRITICAL"], "default": "WARNING"}},
+    {"name": "state", "type": {"type": "enum", "name": "AlarmState", "symbols": ["RAISED", "CLEARED"], "default": "RAISED"}},
+    {"name": "ts", "type": {"type": "long", "logicalType": "timestamp-millis"}, "doc": "Time of the telemetry sample that completed the persistence window, UTC."},
+    {"name": "value", "type": "double", "doc": "Channel value of that sample."},
+    {"name": "threshold", "type": "double", "doc": "Threshold crossed, in the channel unit."},
+    {"name": "hysteresis", "type": "double", "doc": "Hysteresis applied to the clear condition, in the channel unit."},
+    {"name": "persistence_samples", "type": "int", "doc": "Consecutive samples required before the state changed."},
+    {"name": "source_seq", "type": "long", "doc": "seq of the telemetry sample that triggered the event."},
+    {"name": "synthetic", "type": "boolean", "doc": "True when the source telemetry is synthetic."}
+  ]
+}
