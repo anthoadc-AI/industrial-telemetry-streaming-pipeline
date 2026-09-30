@@ -1,0 +1,31 @@
+# Topic names for MQTT and Kafka. Every component reads them from here.
+#
+# The TELEMETRY_TOPIC environment variable, when set and non-empty,
+# overrides kafka.telemetry_raw.name; nothing else is overridable.
+
+mqtt:
+  telemetry:
+    # One topic per asset; {asset_id} is replaced by the publisher.
+    template: plant/{asset_id}/telemetry
+    subscription: plant/+/telemetry
+    qos: 1
+
+kafka:
+  telemetry_raw:
+    name: telemetry.raw
+    description: Validated telemetry from the MQTT bridge, Avro, keyed by asset_id.
+    partitions: 3
+    replication_factor: 1
+    value_schema: schemas/telemetry_v1.avsc
+  telemetry_alarms:
+    name: telemetry.alarms
+    description: Alarm raise and clear events from the alarm consumer (Phase 2), keyed by asset_id.
+    partitions: 3
+    replication_factor: 1
+    value_schema: schemas/alarm_v1.avsc
+  telemetry_dlq:
+    name: telemetry.dlq
+    description: Messages that failed validation, with the reason (Phase 2).
+    partitions: 1
+    replication_factor: 1
+    value_schema: null

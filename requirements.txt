@@ -1,0 +1,4 @@
+# Python dependencies for the Phase 1 components (config loader, simulator,
+# bridge). Exact pins; install into a virtual environment:
+#   python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
+PyYAML==6.0.3
