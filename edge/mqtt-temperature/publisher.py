@@ -1,10 +1,16 @@
+import os
+import sys
 import time
 import random
 import paho.mqtt.client as mqtt
 import json
 PORT = 9883
 THINGSBOARD_HOST = 'localhost'
-ACCESS_TOKEN = 'DHT11_DEMO_TOKEN'
+
+# Device access token, from the environment (see .env.example).
+ACCESS_TOKEN = os.environ.get('TB_ACCESS_TOKEN')
+if not ACCESS_TOKEN:
+    sys.exit('TB_ACCESS_TOKEN is not set; see .env.example')
 
 # Data capture and upload interval in seconds.
 
