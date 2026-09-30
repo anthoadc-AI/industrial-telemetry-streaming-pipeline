@@ -1,0 +1,16 @@
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+*.log
+.env
+.mytb-*
+*/data/
+.pytest_cache/
+.idea/
+.vscode/
+*.docx
+*.pdf
+*.zip
+*.png
+*.jpg
