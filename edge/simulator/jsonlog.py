@@ -35,3 +35,6 @@ def configure(level: str) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
+    # Library warnings (for example deprecation notices at import time) go
+    # through the same handler, so stderr stays pure JSON lines.
+    logging.captureWarnings(True)
