@@ -8,3 +8,4 @@ Makefile       text eol=lf
 .env.example   text eol=lf
 *.avsc         text eol=lf
 *.txt          text eol=lf
+*.conf         text eol=lf
