@@ -653,6 +653,8 @@ industrial-telemetry-streaming-pipeline/
 | 9 | Is `v0-coursework` faithful or cleaned? | **Faithful snapshot**, cleaned in later commits. Original paths and names in v0; only secrets and binaries (`.docx`, screenshots, `.zip`) excluded even from v0. §7 mapping updated accordingly. |
 | 10 | Course `.docx` files | **Out of the repository entirely.** |
 
+> **Owner note, 2026-10-01, on decision 5:** closed as moot. The Phase 1 parameterisation of the rule-chain exports found that no Firebase REST node used an `auth=` parameter or stored credentials; the database host was the only sensitive value. There is no secret to rotate. See `docs/internal/phase1_closure_report.md`, sections 7.1 and 9.
+
 Deviation disposition also decided: **3–6 are owner improvements to be claimed in the final README; 7–9 go to the Phase 1 fix list** (§6.1).
 
 ### 8.1b Decisions recorded at Phase 0 closure (Anthony Dávila Carrillo, 2026-09-26)

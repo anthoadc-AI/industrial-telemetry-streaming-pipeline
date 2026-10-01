@@ -7,7 +7,7 @@
 | Briefing | `docs/internal/claude_code_briefings/phase1_briefing_solid_base.md`, v1.0 |
 | Work dates | 2026-09-30 local (UTC-4); container runs logged in UTC on 2026-10-01 |
 | Machine | Windows 11 Home, Docker Engine 29.0.1, WSL 2 cap 12 GB (12,544,364,544 B reported) |
-| Status | **Awaiting owner review at DETENTE 4b.** Phase closure is the owner's decision. |
+| Status | **Phase 1 CLOSED by owner, 2026-10-01.** Report reviewed and accepted. |
 
 All data produced in this phase is synthetic.
 
@@ -196,9 +196,9 @@ MIT licence; `.env.example` variable list; docs/internal redaction and allow-lis
 | Images declare VOLUME paths the compose file did not mount; each `make down` + `make up` left five anonymous volumes | All declared paths mounted (named volumes for ThingsBoard, tmpfs elsewhere); volume count stable at 99 across up, down, up |
 | The smoke probes block-buffered stdout when redirected | Line-buffered |
 
-### 7.4 Housekeeping the owner must decide
+### 7.4 Housekeeping
 
-- **Ten orphaned anonymous Docker volumes** were left by this phase before the fix above, five created at 2026-10-01T00:09:24Z and five at 01:45:08Z, all unlabelled and attached to no container. They hold nothing of value (secrets directories with no secrets, empty Mosquitto data and log). I did not remove them: removing volumes is the owner's call. Their ids are in the session record and can be listed with `docker volume ls -f dangling=true`, which may also show dangling volumes from other projects.
+- **Ten orphaned anonymous Docker volumes** were left by this phase before the fix above, five created at 2026-10-01T00:09:24Z and five at 01:45:08Z (2026-09-30 20:09 and 21:45 local), all anonymous and attached to no container, holding nothing of value (secrets directories with no secrets, empty Mosquitto data and log). **Removed on owner instruction at the end of the 2026-09-30 session**, by id, one by one, never with `prune`; each was re-checked for creation time, anonymous label and no attached container before removal. Docker volume count: **99 before, 89 after**; still 89 when re-checked on 2026-10-01, when all ten ids were confirmed absent. No other volume was touched: the project's named ThingsBoard volumes and the 62 dangling volumes of other projects and earlier months remain.
 - **Twelve Airflow and Hadoop containers remain stopped**, as they were at the start of the phase (Phase 0 outstanding item).
 
 ### 7.5 Smoke-run attempts that did not count
@@ -241,5 +241,5 @@ Two earlier attempts at the smoke orchestration failed in my scratch script, not
 - Stack stopped with `make down` (no `-v`) after the final run. The ThingsBoard named volumes `industrial-telemetry_tb-data` and `industrial-telemetry_tb-logs` are kept; Kafka and ZooKeeper data was in tmpfs and is gone by design.
 - The coursework ThingsBoard data `~/.mytb-data` was used only to inspect dashboards at DETENTE 4a, through its own course compose stack, stopped afterwards with `docker compose down`, no `-v`. It measured 150,037,650 B before and after that stop; the growth from 149,645,786 B at Phase 0 closure is ThingsBoard's own writes while it ran.
 - The raw rule-chain exports remain only in `its-pipeline-backup/`, outside the repository; it was read to produce the parameterised copies, never written, and is never referenced by a relative path from the repository.
-- The Firebase credential has not been rotated; per Phase 0 decision 5 that happens at Phase 1 closure, by the owner.
+- **Firebase credential rotation: closed as moot (owner, 2026-10-01).** Phase 0 decision 5 planned to rotate the Firebase secret at Phase 1 closure. No Firebase REST node used an `auth=` parameter or stored credentials (section 7.1), so there is no secret to rotate. The database itself has been locked since its test-mode rules expired on 2026-09-25; authenticating it is Phase 2 backlog (section 8.3).
 - Nothing was pushed to GitHub.
