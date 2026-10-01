@@ -23,3 +23,8 @@ Source: `docs/internal/phase1_closure_report.md`, sections 8.2 and 8.3, copied v
 - **First-install healthcheck.** Verify the ThingsBoard healthcheck on an empty volume (needs owner authorisation for `down -v` on the new stack) and time the first-ever `make up`.
 - **`KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE`** is set as the briefing required but is not recognised by cp-server 6.1.1; telemetry is off through `confluent.telemetry.enabled = false`. Remove or replace the inert variable.
 - **Line endings.** `.gitattributes`, `.gitignore` and `LICENSE` are not in the LF list and check out with CRLF on Windows. Harmless; add them for consistency.
+
+## Recorded during Phase 2
+
+- **kafkajs maintenance risk** (owner, 2026-10-01). The alarm consumer uses `kafkajs` 2.2.4, the latest release, published 2023-02-27; the project has published nothing since. It is the owner's choice and does not block Phase 2. The maintained alternative, if kafkajs becomes a problem (for example on a future Node.js major), is `@confluentinc/kafka-javascript`, Confluent's client built on librdkafka, the library the Python bridge already uses.
+- **kafkajs on Node.js 24: `TimeoutNegativeWarning` at start-up** (found in Task 2.2, 2026-10-01). Every start of the alarm consumer emits one Node.js warning, "-<epoch ms> is a negative number. Timeout duration was set to 1.", from a timeout kafkajs 2.2.4 computes internally. Node.js clamps it to 1 ms; no effect was observed. The consumer routes process warnings through the JSON logger, so stderr stays JSON-only. Another sign of the kafkajs maintenance risk above.

@@ -2,11 +2,12 @@
 
     python -m broker.kafka.provision
 
-Topics come from config/topics.yaml, with their partition count and
-replication factor. The broker has automatic topic creation disabled, so
-this is the only way topics come into existence. Existing topics are left
-alone; a topic whose partition count differs from the configuration is
-reported as an error rather than altered.
+Topics come from config/topics.yaml, with their partition count,
+replication factor and topic-level `configs` (for example
+cleanup.policy=compact on telemetry.alarms). The broker has automatic topic
+creation disabled, so this is the only way topics come into existence.
+Existing topics are left alone; a topic whose partition count or configured
+settings differ from config/ is reported as an error rather than altered.
 
 Schema Registry's global compatibility level is set to BACKWARD, the policy
 schemas/README.md describes, and read back to confirm.
@@ -26,7 +27,7 @@ import urllib.error
 import urllib.request
 
 from confluent_kafka import KafkaException
-from confluent_kafka.admin import AdminClient, NewTopic
+from confluent_kafka.admin import AdminClient, ConfigResource, NewTopic
 
 from common import jsonlog
 from config.loader import ConfigError, load_config
@@ -55,21 +56,44 @@ def provision_topics(bootstrap: str) -> bool:
                 log.error("topic_partition_mismatch", extra={"topic": t.name, "partitions": partitions,
                                                              "configured_partitions": t.partitions, "altered": False})
                 ok = False
+            elif not configs_match(admin, t):
+                ok = False
             else:
-                log.info("topic_exists", extra={"topic": t.name, "partitions": partitions})
+                log.info("topic_exists", extra={"topic": t.name, "partitions": partitions, "configs": dict(t.configs)})
     if missing:
         futures = admin.create_topics(
-            [NewTopic(t.name, num_partitions=t.partitions, replication_factor=t.replication_factor) for t in missing],
+            [NewTopic(t.name, num_partitions=t.partitions, replication_factor=t.replication_factor,
+                      config=dict(t.configs)) for t in missing],
             operation_timeout=TIMEOUT_S,
         )
+        configured = {t.name: dict(t.configs) for t in missing}
         for name, future in futures.items():
             try:
                 future.result()
-                log.info("topic_created", extra={"topic": name})
+                log.info("topic_created", extra={"topic": name, "configs": configured[name]})
             except KafkaException as e:
                 log.error("topic_create_failed", extra={"topic": name, "error": str(e)})
                 ok = False
     return ok
+
+
+def configs_match(admin: AdminClient, topic) -> bool:
+    """True when every setting in config/ has the same value on the existing topic."""
+    if not topic.configs:
+        return True
+    resource = ConfigResource(ConfigResource.Type.TOPIC, topic.name)
+    try:
+        actual = admin.describe_configs([resource])[resource].result(timeout=TIMEOUT_S)
+    except KafkaException as e:
+        log.error("topic_config_unreadable", extra={"topic": topic.name, "error": str(e)})
+        return False
+    differing = {k: (actual[k].value if k in actual else None) for k, v in topic.configs.items()
+                 if k not in actual or actual[k].value != v}
+    if differing:
+        log.error("topic_config_mismatch", extra={"topic": topic.name, "actual": differing,
+                                                  "configured": dict(topic.configs), "altered": False})
+        return False
+    return True
 
 
 def set_compatibility(registry_url: str) -> bool:
