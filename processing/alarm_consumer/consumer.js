@@ -189,7 +189,9 @@ async function decodeTelemetry(registry, value) {
     await registry.getSchema(schemaId);
   } catch (e) {
     if (e && e.status === 404) return deadLetter('undecodable', `schema id ${schemaId} not found in Schema Registry`, schemaId);
-    throw new TransientRegistryError(`Schema Registry unavailable resolving schema id ${schemaId}: ${e.message}`);
+    // e may not be an Error: the client can reject with any value.
+    const reason = e instanceof Error ? e.message : String(e);
+    throw new TransientRegistryError(`Schema Registry unavailable resolving schema id ${schemaId}: ${reason}`);
   }
   let sample;
   try {
