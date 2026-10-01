@@ -32,14 +32,15 @@ At the end of Phase 2, `make up && make test` on a fresh clone must pass, CI mus
 - Brings diversity to the stack: Python (simulator, bridge) + Node.js (consumer, matches course pattern)
 - Shares `config/alarms.yaml` seamlessly through common loader
 - Demonstrates cross-language Kafka integration (production-grade)
-- Node.js ecosystem: `kafkajs` + `winston` for structured logging
+- Node.js ecosystem: `kafkajs`, with structured logging through `common/jsonlog.js`
 
 **Design Sketch (refined during work):**
 ```
 Kafka.telemetry.raw --consume--> AlarmConsumer
   ├─ reads config/alarms.yaml (asset thresholds, hysteresis, persistence window)
   ├─ tracks asset state per alarm rule (triggered, cleared, debounce)
-  ├─ outputs (asset_id, rule_id, state_change, ts) to telemetry.alarms
+  ├─ outputs alarm_v1 events (alarm_id, asset_id, channel, severity, state, ts, value, ...) to telemetry.alarms;
+  │  the rule is identified by (asset_id, channel), there is no rule_id field
   └─ logs structured JSON (asset, rule, trigger_value, transition)
 
 Invalid messages (schema mismatch, missing fields) → telemetry.dlq + log + metric
@@ -103,7 +104,7 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 **Wiring (new in Phase 2):**
 - Root Rule Chain node: "AlarmToThingsBoard" (existing REST node, renamed)
 - Input: subscribe to `telemetry.alarms` (Kafka Connector in ThingsBoard)
-- Output: Store the alarm in device telemetry attributes (asset_id, rule_id, state, ts)
+- Output: Store the alarm in device telemetry attributes (asset_id, channel, severity, state, ts)
 - Node: "TelemetryLogger" → existing, log alarms
 
 **Verification:**
@@ -157,7 +158,6 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 - `package.json` must be created in this task: the coursework one was removed with the course consumer in Phase 1. Pin exact versions.
 - `kafkajs` for the consumer and producer
 - `@kafkajs/confluent-schema-registry` for Avro decode (`telemetry.raw`) and encode (`alarm_v1` to `telemetry.alarms`), against the same Schema Registry the bridge uses
-- `winston` for structured JSON logging (or simple `console.log` with structured output if preferred)
 - `yaml` (to parse config/alarms.yaml)
 
 **Design Notes:**
@@ -170,7 +170,7 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
      - Evaluate threshold (e.g., `temperature > 80`)
      - Apply hysteresis (don't re-trigger within N seconds)
      - Track state in Map (triggered_at, debounce_until)
-     - If state changed: produce to `telemetry.alarms` with `{ asset_id, rule_id, state, ts, value }`
+     - If state changed: produce an `alarm_v1` record to `telemetry.alarms` (`alarm_id`, `asset_id`, `channel`, `severity`, `state`, `ts`, `value`, ...); the rule is (`asset_id`, `channel`), not a `rule_id` field
   4. Invalid messages: produce to `telemetry.dlq`, log WARN
 - Periodic cleanup: remove alarms older than persistence window (default 1 hour) with setInterval
 - On SIGTERM: flush pending alarms, close Kafka, exit 0
@@ -179,7 +179,7 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 - Run consumer against Kafka (from Phase 1 stack, no simulator)
 - Inject 5 test messages by hand (Avro, key by asset_id) using `scripts/smoke/avro_produce.js` (new)
 - Verify 5 alarms appear in `telemetry.alarms` and dlq (if any invalid)
-- Check stderr for JSON lines with rule_id, state, asset_id
+- Check stderr for JSON lines with asset_id, channel, severity, state
 
 **DETENTE 2.2.a:** Consumer runs, consumes from Kafka, produces to alarms topic with correct schema. Log the consumer startup message. Confirm.
 
