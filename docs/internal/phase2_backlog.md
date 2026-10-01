@@ -10,6 +10,9 @@ Source: `docs/internal/phase1_closure_report.md`, sections 8.2 and 8.3, copied v
 ## From the Phase 1 briefing and from Phase 1 work (closure report section 8.3)
 
 - **Alarm consumer** in Python on `telemetry.raw`: thresholds, persistence and hysteresis from `config/alarms.yaml`, producing `alarm_v1` events to `telemetry.alarms`.
+
+  > **Owner note, 2026-10-01:** the alarm consumer is built in **Node.js** (kafkajs), not Python. This supersedes Phase 0 decision 14 and this item's language. The rest of the item stands: thresholds, persistence and hysteresis from `config/alarms.yaml`, `alarm_v1` events to `telemetry.alarms`. `common/` is approved as a new top-level directory for the shared JSON loggers (`common/jsonlog.py`, `common/jsonlog.js`). Source: `docs/internal/claude_code_briefings/phase2_briefing_engineering_quality.md`, Task 2.1.
+
 - **Dead-letter topic.** The bridge marks the spot with `TODO(phase-2)`; invalid messages are currently logged and dropped.
 - **Tests and CI** (`tests/`, `.github/workflows/`).
 - **Firebase authentication** and auth-based database rules; the database has been locked since 2026-09-25, and the sink stays disabled until then.

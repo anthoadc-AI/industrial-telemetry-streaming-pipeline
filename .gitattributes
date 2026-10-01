@@ -9,3 +9,4 @@ Makefile       text eol=lf
 *.avsc         text eol=lf
 *.txt          text eol=lf
 *.conf         text eol=lf
+*.js           text eol=lf
