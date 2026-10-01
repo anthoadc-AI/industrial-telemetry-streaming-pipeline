@@ -235,6 +235,17 @@ def _read_yaml(path: Path) -> Mapping[str, Any]:
     return _mapping(data, path.name)
 
 
+def _absent_as(value: Any, default: Any) -> Any:
+    """``default`` when an optional key is absent or null, else the value as written.
+
+    Only None counts as absent: ``value or default`` would also turn an empty
+    container of the wrong type (``[]`` where a mapping belongs) into the
+    default and skip its type check. The Node.js loader behaves the same way
+    (``?? {}``).
+    """
+    return default if value is None else value
+
+
 def _frozen(d: dict) -> Mapping:
     return MappingProxyType(d)
 
@@ -318,7 +329,7 @@ def _parse_telemetry(data: Mapping[str, Any]) -> TelemetryConfig:
         missing_noise = set(asset_channels) - noise.keys()
         if missing_noise:
             raise ConfigError(f"{aw}.noise_std: missing channel(s) {sorted(missing_noise)}")
-        degradation = _parse_channel_values(a.get("degradation") or {}, f"{aw}.degradation", asset_channels, min_=None)
+        degradation = _parse_channel_values(_absent_as(a.get("degradation"), {}), f"{aw}.degradation", asset_channels, min_=None)
 
         assets.append(Asset(asset_id, _str(a["type"], f"{aw}.type"), _str(a["description"], f"{aw}.description"),
                             asset_channels, load, electrical, thermal, vibration, noise, degradation))
@@ -343,7 +354,7 @@ def _parse_telemetry(data: Mapping[str, Any]) -> TelemetryConfig:
         faults[name] = FaultMode(name, channel, kind, _num(f["magnitude"], f"{fw}.magnitude"), ramp_s,
                                  _str(f["description"], f"{fw}.description"))
 
-    schedule_raw = data["fault_schedule"] or []
+    schedule_raw = _absent_as(data["fault_schedule"], [])
     if not isinstance(schedule_raw, list):
         raise ConfigError(f"{w}.fault_schedule: expected a list")
     telemetry = TelemetryConfig(
@@ -393,7 +404,7 @@ def _parse_alarms(data: Mapping[str, Any], telemetry: TelemetryConfig) -> Alarms
         _keys(rule, cw, {"direction", "hysteresis", "persistence_samples"}, {"warning", "critical"})
         defaults[channel] = rule
 
-    overrides = _mapping(data.get("asset_overrides") or {}, f"{w}.asset_overrides")
+    overrides = _mapping(_absent_as(data.get("asset_overrides"), {}), f"{w}.asset_overrides")
     for asset_id, per_channel in overrides.items():
         ow = f"{w}.asset_overrides.{asset_id}"
         try:
@@ -467,7 +478,7 @@ def _parse_topics(data: Mapping[str, Any], env: Mapping[str, str]) -> TopicsConf
         if key == "telemetry_raw" and env.get(TELEMETRY_TOPIC_ENV):
             name = env[TELEMETRY_TOPIC_ENV]
         configs = {}
-        for k, v in _mapping(topic.get("configs") or {}, f"{tw}.configs").items():
+        for k, v in _mapping(_absent_as(topic.get("configs"), {}), f"{tw}.configs").items():
             if isinstance(v, bool) or not isinstance(v, (str, int, float)):
                 raise ConfigError(f"{tw}.configs.{k}: expected a string or number")
             configs[_str(k, f"{tw}.configs")] = str(v)
