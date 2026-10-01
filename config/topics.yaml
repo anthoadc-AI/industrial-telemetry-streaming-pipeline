@@ -34,7 +34,11 @@ kafka:
       cleanup.policy: compact
   telemetry_dlq:
     name: telemetry.dlq
-    description: Messages that failed validation, with the reason (Phase 2).
+    description: Messages the bridge or the alarm consumer could not process, intact, with the reason; keyed by asset_id when known.
     partitions: 1
     replication_factor: 1
-    value_schema: null
+    value_schema: schemas/dlq_v1.avsc
+    # Seven days, deletion by age (owner decision, Task 2.3 STEP 0).
+    configs:
+      cleanup.policy: delete
+      retention.ms: 604800000
