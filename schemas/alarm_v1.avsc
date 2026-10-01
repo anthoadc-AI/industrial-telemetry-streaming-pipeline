@@ -4,8 +4,8 @@
   "namespace": "industrial_telemetry",
   "doc": "An alarm raise or clear event produced by the alarm consumer (Phase 2). Version 1. Derived from synthetic data.",
   "fields": [
-    {"name": "alarm_id", "type": "string", "doc": "Identifier shared by the RAISED event and the CLEARED event that closes it."},
-    {"name": "asset_id", "type": "string", "doc": "Asset identifier; also the Kafka message key."},
+    {"name": "alarm_id", "type": "string", "doc": "Identifier shared by the RAISED event and the CLEARED event that closes it: asset_id/channel/severity/<ts of the RAISED event, epoch ms>. Also the Kafka message key, so the compacted topic keeps the latest event per alarm."},
+    {"name": "asset_id", "type": "string", "doc": "Asset identifier."},
     {"name": "channel", "type": "string", "doc": "Telemetry field the alarm applies to, for example bearing_temperature_c."},
     {"name": "severity", "type": {"type": "enum", "name": "AlarmSeverity", "symbols": ["WARNING", "CRITICAL"], "default": "WARNING"}},
     {"name": "state", "type": {"type": "enum", "name": "AlarmState", "symbols": ["RAISED", "CLEARED"], "default": "RAISED"}},

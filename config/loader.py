@@ -161,6 +161,7 @@ class KafkaTopic:
     partitions: int
     replication_factor: int
     value_schema: Path | None
+    configs: Mapping[str, str]  # topic-level settings, applied at creation
 
 
 @dataclass(frozen=True)
@@ -455,7 +456,7 @@ def _parse_topics(data: Mapping[str, Any], env: Mapping[str, str]) -> TopicsConf
     for key, topic in k.items():
         tw = f"{w}.kafka.{key}"
         topic = _mapping(topic, tw)
-        _keys(topic, tw, {"name", "description", "partitions", "replication_factor", "value_schema"})
+        _keys(topic, tw, {"name", "description", "partitions", "replication_factor", "value_schema"}, {"configs"})
         schema = topic["value_schema"]
         schema_path = None
         if schema is not None:
@@ -465,10 +466,15 @@ def _parse_topics(data: Mapping[str, Any], env: Mapping[str, str]) -> TopicsConf
         name = _str(topic["name"], f"{tw}.name")
         if key == "telemetry_raw" and env.get(TELEMETRY_TOPIC_ENV):
             name = env[TELEMETRY_TOPIC_ENV]
+        configs = {}
+        for k, v in _mapping(topic.get("configs") or {}, f"{tw}.configs").items():
+            if isinstance(v, bool) or not isinstance(v, (str, int, float)):
+                raise ConfigError(f"{tw}.configs.{k}: expected a string or number")
+            configs[_str(k, f"{tw}.configs")] = str(v)
         kafka[key] = KafkaTopic(key, name, _str(topic["description"], f"{tw}.description"),
                                 _int(topic["partitions"], f"{tw}.partitions", min_=1),
                                 _int(topic["replication_factor"], f"{tw}.replication_factor", min_=1),
-                                schema_path)
+                                schema_path, _frozen(configs))
     return TopicsConfig(mqtt_telemetry, _frozen(kafka))
 
 

@@ -2,6 +2,9 @@
 #
 # The TELEMETRY_TOPIC environment variable, when set and non-empty,
 # overrides kafka.telemetry_raw.name; nothing else is overridable.
+#
+# A Kafka topic may carry `configs`, topic-level settings applied when
+# broker/kafka/provision.py creates it.
 
 mqtt:
   telemetry:
@@ -19,10 +22,16 @@ kafka:
     value_schema: schemas/telemetry_v1.avsc
   telemetry_alarms:
     name: telemetry.alarms
-    description: Alarm raise and clear events from the alarm consumer (Phase 2), keyed by asset_id.
+    description: Alarm raise and clear events from the alarm consumer, keyed by alarm_id.
     partitions: 3
     replication_factor: 1
     value_schema: schemas/alarm_v1.avsc
+    # Compacted, keyed by alarm_id: the topic keeps at least the latest event
+    # of every alarm, which the alarm consumer reads at start-up to rebuild
+    # its active alarms. Both events of one alarm share a key, so they stay
+    # in order on one partition.
+    configs:
+      cleanup.policy: compact
   telemetry_dlq:
     name: telemetry.dlq
     description: Messages that failed validation, with the reason (Phase 2).
