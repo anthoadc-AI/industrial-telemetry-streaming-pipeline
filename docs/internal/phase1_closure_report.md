@@ -70,7 +70,7 @@ Conventional Commits with narrative bodies; every feature branch merged with `--
 
 ## 3. Exact commands run for the smoke test
 
-From the repository root, with `.env` copied from `.env.example` and `TB_TENANT_PASSWORD=tenant` (the ThingsBoard CE public default):
+From the repository root, with `.env` copied from `.env.example` and the tenant password set to the ThingsBoard CE public default:
 
 ```
 make up
