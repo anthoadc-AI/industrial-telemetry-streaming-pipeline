@@ -8,9 +8,13 @@
 # Stop it with `make down` (never with -v, which deletes the ThingsBoard
 # volume).
 #
-# Profiles: "firebase" is reserved for the optional Firebase sink, which is
-# disabled by default and has no service yet. Services added under it run
-# only with `--profile firebase` or COMPOSE_PROFILES=firebase.
+# Profiles:
+#   (none)    the core stack: mosquitto, zookeeper, broker, schema-registry.
+#             What CI and `make up-core` run.
+#   full      adds thingsboard. `make up` runs it.
+#   firebase  reserved for the optional Firebase sink, which is disabled by
+#             default and has no service yet.
+# No core service depends on thingsboard, so the core stack starts alone.
 #
 # Every path an image declares as a VOLUME is mounted explicitly: named
 # volumes for ThingsBoard, tmpfs everywhere else. An unmounted VOLUME would
@@ -119,6 +123,7 @@ services:
 
   thingsboard:
     image: thingsboard/tb-postgres:4.2.1.1
+    profiles: ["full"]
     ports:
       - "${TB_HTTP_PORT:-8080}:9090"
       - "${TB_MQTT_PORT:-9883}:1883"

@@ -1,0 +1,108 @@
+"""Integration-test fixtures: one stack per session, offset marks and unique consumer groups per test.
+
+The session fixture refuses to run if a stack (or anything on its ports) is
+already up, starts the stack with the repository's docker-compose.yml (core
+profile, or full with ThingsBoard), provisions it, and stops it at the end
+with `docker compose --profile full down`, never -v. It counts Docker volumes
+before and after and fails the session if any leaked.
+
+Options:
+  --stack-profile core|full   core: Mosquitto, ZooKeeper, Kafka, Schema Registry
+                              full: core plus ThingsBoard and the rule-chain import
+  --reverse-order             run the tests in reverse, to show they do not depend
+                              on order
+"""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+import integration_support as it
+
+TOPICS = ("telemetry.raw", "telemetry.alarms", "telemetry.dlq")
+
+
+def pytest_addoption(parser):
+    parser.addoption("--stack-profile", choices=["core", "full"], default="core")
+    parser.addoption("--reverse-order", action="store_true", default=False)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "full: needs the full profile (ThingsBoard)")
+    config.stack_report = {}
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--stack-profile") != "full":
+        skip = pytest.mark.skip(reason="needs --stack-profile=full (ThingsBoard)")
+        for item in items:
+            if "full" in item.keywords:
+                item.add_marker(skip)
+    if config.getoption("--reverse-order"):
+        items.reverse()
+
+
+@pytest.fixture(scope="session")
+def stack(request):
+    profile = request.config.getoption("--stack-profile")
+    ports = [1883, 9092, 8081] + ([8080, 9883] if profile == "full" else [])
+    busy = [p for p in ports if it.port_open(p)]
+    if busy or it.compose("--profile", "full", "ps", "-q").stdout.strip():
+        pytest.exit(f"a stack is already running (ports in use: {busy}); stop it with `make down` first", returncode=3)
+
+    report = request.config.stack_report
+    report["profile"] = profile
+    report["volumes_before"] = it.volume_count()
+    profile_args = ["--profile", "full"] if profile == "full" else []
+    started = time.monotonic()
+    up = it.compose(*profile_args, "up", "-d", "--wait", "--wait-timeout", "600", "--force-recreate")
+    if up.returncode != 0:
+        it.compose("--profile", "full", "down")
+        pytest.exit(f"docker compose up failed: {up.stderr[-800:]}", returncode=3)
+    report["up_s"] = round(time.monotonic() - started, 1)
+    it.provision()
+    if profile == "full":
+        result = it.run_module("scripts/thingsboard/import_rule_chains.py")
+        assert result.returncode == 0, result.stderr[-800:]
+    report["ready_s"] = round(time.monotonic() - started, 1)
+
+    yield profile
+
+    started = time.monotonic()
+    down = it.compose("--profile", "full", "down")
+    report["down_s"] = round(time.monotonic() - started, 1)
+    report["volumes_after"] = it.volume_count()
+    assert down.returncode == 0, down.stderr[-800:]
+    assert report["volumes_after"] == report["volumes_before"], f"volumes leaked: {report}"
+
+
+@pytest.fixture
+def offsets_mark(stack):
+    """End offsets of the three pipeline topics at the start of the test."""
+    return {topic: it.watermarks(topic) for topic in TOPICS}
+
+
+@pytest.fixture
+def fresh_group(stack):
+    """A consumer group id used by this test only, positioned at the end of telemetry.raw."""
+    def make() -> str:
+        group = it.unique("it-alarms")
+        it.position_group_at_end(group, "telemetry.raw")
+        return group
+    return make
+
+
+@pytest.fixture
+def log_dir(tmp_path):
+    return tmp_path
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    report = getattr(config, "stack_report", None)
+    if report:
+        terminalreporter.write_sep("-", "integration stack")
+        terminalreporter.write_line(
+            f"profile={report.get('profile')} up={report.get('up_s')}s ready={report.get('ready_s')}s "
+            f"down={report.get('down_s')}s volumes before={report.get('volumes_before')} after={report.get('volumes_after')}")
