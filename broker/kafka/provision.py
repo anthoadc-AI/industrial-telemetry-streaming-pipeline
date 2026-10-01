@@ -28,6 +28,7 @@ import urllib.request
 from confluent_kafka import KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 
+from common import jsonlog
 from config.loader import ConfigError, load_config
 
 log = logging.getLogger("broker.kafka.provision")
@@ -42,7 +43,7 @@ def provision_topics(bootstrap: str) -> bool:
     try:
         existing = admin.list_topics(timeout=TIMEOUT_S).topics
     except KafkaException as e:
-        log.error("kafka unreachable at %s: %s", bootstrap, e)
+        log.error("kafka_unreachable", extra={"bootstrap": bootstrap, "error": str(e)})
         return False
 
     ok = True
@@ -51,10 +52,11 @@ def provision_topics(bootstrap: str) -> bool:
         if t.name in existing:
             partitions = len(existing[t.name].partitions)
             if partitions != t.partitions:
-                log.error("topic %s exists with %d partitions, config says %d; not altered", t.name, partitions, t.partitions)
+                log.error("topic_partition_mismatch", extra={"topic": t.name, "partitions": partitions,
+                                                             "configured_partitions": t.partitions, "altered": False})
                 ok = False
             else:
-                log.info("topic %s exists (%d partitions)", t.name, partitions)
+                log.info("topic_exists", extra={"topic": t.name, "partitions": partitions})
     if missing:
         futures = admin.create_topics(
             [NewTopic(t.name, num_partitions=t.partitions, replication_factor=t.replication_factor) for t in missing],
@@ -63,9 +65,9 @@ def provision_topics(bootstrap: str) -> bool:
         for name, future in futures.items():
             try:
                 future.result()
-                log.info("topic %s created", name)
+                log.info("topic_created", extra={"topic": name})
             except KafkaException as e:
-                log.error("topic %s not created: %s", name, e)
+                log.error("topic_create_failed", extra={"topic": name, "error": str(e)})
                 ok = False
     return ok
 
@@ -81,21 +83,21 @@ def set_compatibility(registry_url: str) -> bool:
         with urllib.request.urlopen(url, timeout=TIMEOUT_S) as response:
             level = json.load(response).get("compatibilityLevel")
     except (urllib.error.URLError, OSError, ValueError) as e:
-        log.error("schema registry at %s: %s", registry_url, e)
+        log.error("schema_registry_unreachable", extra={"url": registry_url, "error": str(e)})
         return False
     if level != COMPATIBILITY:
-        log.error("schema registry compatibility reads back as %s, expected %s", level, COMPATIBILITY)
+        log.error("schema_registry_compatibility_mismatch", extra={"compatibility": level, "expected": COMPATIBILITY})
         return False
-    log.info("schema registry global compatibility is %s", level)
+    log.info("schema_registry_compatibility", extra={"compatibility": level})
     return True
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="provision: %(levelname)s %(message)s")
+    jsonlog.configure("INFO")
     try:
         load_config()
     except ConfigError as e:
-        log.error("invalid configuration: %s", e)
+        log.error("config_invalid", extra={"error": str(e)})
         return 1
     bootstrap = os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092")
     registry = os.environ.get("SCHEMA_REGISTRY_URL", "http://localhost:8081")
