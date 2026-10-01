@@ -1,0 +1,19 @@
+{
+  "name": "industrial-telemetry-streaming-pipeline",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Node.js components of the industrial telemetry streaming pipeline (alarm consumer). All data is synthetic.",
+  "license": "MIT",
+  "author": "Anthony Davila Carrillo",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "alarm-consumer": "node processing/alarm_consumer/index.js"
+  },
+  "dependencies": {
+    "@kafkajs/confluent-schema-registry": "4.1.0",
+    "kafkajs": "2.2.4",
+    "yaml": "2.9.1"
+  }
+}

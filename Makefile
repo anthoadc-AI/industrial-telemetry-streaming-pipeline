@@ -1,6 +1,7 @@
 # Developer entry points.
 #
-#   make install        create .venv and install requirements.txt
+#   make install        create .venv, install requirements.txt, and install the
+#                       npm dependencies from package-lock.json (npm ci)
 #   make up             start the stack, create Kafka topics, set Schema Registry
 #                       compatibility, import the ThingsBoard rule chains
 #   make down           stop the stack (keeps the ThingsBoard volume; never -v)
@@ -29,6 +30,7 @@ endif
 install:
 	$(PYTHON) -m venv .venv
 	$(VENV_PY) -m pip install -r requirements.txt
+	npm ci --no-fund --no-audit
 
 # --force-recreate: containers are always created fresh. Phase 0 reproduced a
 # ThingsBoard container that, restarted after an unclean stop, came up without
