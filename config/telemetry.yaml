@@ -92,6 +92,13 @@ faults:
     magnitude: 45.0
     ramp_s: 180
     description: Local frictional heating at a failing bearing.
+  # Intended, owner decision 2026-10-01: on pump-01 this fault crosses the
+  # vibration WARNING threshold (4.5 mm/s) but not CRITICAL (7.1 mm/s).
+  # Measured on pump-01 with the fault active: about 6.5 mm/s typical (6.508
+  # and 6.530 at the RAISED samples of the Task 2.2 runs), 6.96 mm/s maximum
+  # over one simulated hour (Phase 1 offline check). The magnitude is not to
+  # be raised to force CRITICAL; compressor-01, with a higher baseline,
+  # reaches CRITICAL under the same fault (about 7.2 mm/s).
   imbalance:
     channel: vibration_rms_mm_s
     kind: step

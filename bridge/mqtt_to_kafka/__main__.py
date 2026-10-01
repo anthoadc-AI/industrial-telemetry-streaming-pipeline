@@ -7,11 +7,22 @@ Run from the repository root:
 The bridge subscribes to the telemetry subscription in config/topics.yaml,
 validates each JSON payload against schemas/telemetry_v1.avsc, serialises it
 to Avro through Schema Registry, and produces it to the telemetry.raw topic
-keyed by asset_id. Invalid messages are logged with their reason and dropped.
+keyed by asset_id. A message that fails validation or serialisation goes to
+the dead-letter topic, telemetry.dlq, intact (dlq_v1: payload bytes, reason,
+detail), keyed by the asset_id in the MQTT topic.
 
-Start-up fails fast, before subscribing, when Kafka is unreachable, when the
-target topic does not exist (the bridge never creates topics), or when the
-schema cannot be registered.
+Start-up fails fast, before subscribing, when Kafka is unreachable, when
+telemetry.raw or telemetry.dlq does not exist (the bridge never creates
+topics), or when either schema cannot be registered.
+
+Dead-letter send failures: the bridge logs them at ERROR with the payload
+base64-encoded in the log line and carries on; the run then ends with exit
+status 1. The alarm consumer does the opposite and stops without committing.
+The asymmetry follows the source: a Kafka input can be read again from its
+uncommitted offset, so the consumer can afford to stop and retry; an MQTT
+message is acknowledged to the broker on receipt and cannot be fetched again,
+so stopping the bridge would not save it and would halt all valid telemetry
+behind it. The ERROR line is then the message's last copy.
 
 Threads: the paho network thread only enqueues received messages; the main
 thread validates, serialises, produces, serves delivery reports and handles
@@ -39,6 +50,7 @@ message's own ts (the simulator's clock, the same host in this setup):
 from __future__ import annotations
 
 import argparse
+import base64
 import logging
 import os
 import queue
@@ -48,6 +60,7 @@ import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 from confluent_kafka import KafkaException, Producer
@@ -61,6 +74,7 @@ log = logging.getLogger("bridge.mqtt_to_kafka")
 
 CONNECT_TIMEOUT_S = 10.0
 KAFKA_METADATA_TIMEOUT_S = 10.0
+DETAIL_MAX = 1000
 
 
 def _positive_int(text: str) -> int:
@@ -100,12 +114,15 @@ class Stats:
     produced: int = 0
     delivered: int = 0
     delivery_failed: int = 0
+    dlq_delivered: int = 0
+    dlq_failed: int = 0
     invalid: Counter = field(default_factory=Counter)
 
     def as_dict(self) -> dict:
         return {"messages_received": self.received, "messages_invalid": sum(self.invalid.values()),
                 "invalid_by_reason": dict(self.invalid), "messages_produced": self.produced,
-                "messages_delivered": self.delivered, "messages_delivery_failed": self.delivery_failed}
+                "messages_delivered": self.delivered, "messages_delivery_failed": self.delivery_failed,
+                "dead_letters_delivered": self.dlq_delivered, "dead_letters_failed": self.dlq_failed}
 
 
 class Bridge:
@@ -113,6 +130,8 @@ class Bridge:
         self.args = args
         cfg = load_config()
         self.kafka_topic = cfg.topics.telemetry_raw
+        self.dlq_topic = cfg.topics.kafka["telemetry_dlq"]
+        self.dlq_schema_str = self.dlq_topic.value_schema.read_text(encoding="utf-8")
         self.mqtt_topic = cfg.topics.mqtt_telemetry
         self.validator = TelemetryValidator(self.kafka_topic.value_schema, self.mqtt_topic.template)
         self.inbox: queue.Queue[tuple[str, bytes, float]] = queue.Queue()
@@ -121,6 +140,8 @@ class Bridge:
         self.producer: Producer | None = None
         self.serializer = None
         self.serialization_context = None
+        self.dlq_serializer = None
+        self.dlq_context = None
         self.mqtt: mqtt.Client | None = None
 
     # --- start-up --------------------------------------------------------
@@ -141,13 +162,14 @@ class Bridge:
         except KafkaException as e:
             log.error("kafka_unreachable", extra={"bootstrap": self.args.kafka_bootstrap, "error": str(e)})
             return False
-        topic = metadata.topics.get(self.kafka_topic.name)
-        if topic is None or topic.error is not None:
-            log.error("kafka_topic_missing", extra={"topic": self.kafka_topic.name,
-                                                    "error": str(topic.error) if topic else "not found"})
-            return False
+        for name in (self.kafka_topic.name, self.dlq_topic.name):
+            topic = metadata.topics.get(name)
+            if topic is None or topic.error is not None:
+                log.error("kafka_topic_missing", extra={"topic": name, "error": str(topic.error) if topic else "not found"})
+                return False
         log.info("kafka_ready", extra={"bootstrap": self.args.kafka_bootstrap, "topic": self.kafka_topic.name,
-                                       "partitions": len(topic.partitions)})
+                                       "partitions": len(metadata.topics[self.kafka_topic.name].partitions),
+                                       "dlq_topic": self.dlq_topic.name})
         return True
 
     def start_schema_registry(self) -> bool:
@@ -159,16 +181,20 @@ class Bridge:
         from confluent_kafka.serialization import MessageField, SerializationContext
 
         client = SchemaRegistryClient({"url": self.args.schema_registry_url})
-        subject = f"{self.kafka_topic.name}-value"
-        try:
-            schema_id = client.register_schema(subject, Schema(self.validator.schema_str, "AVRO"))
-        except Exception as e:  # the client raises several unrelated types for network and HTTP errors
-            log.error("schema_registration_failed", extra={"url": self.args.schema_registry_url, "subject": subject,
-                                                           "error": str(e)})
-            return False
+        for topic, schema_str in ((self.kafka_topic.name, self.validator.schema_str),
+                                  (self.dlq_topic.name, self.dlq_schema_str)):
+            subject = f"{topic}-value"
+            try:
+                schema_id = client.register_schema(subject, Schema(schema_str, "AVRO"))
+            except Exception as e:  # the client raises several unrelated types for network and HTTP errors
+                log.error("schema_registration_failed", extra={"url": self.args.schema_registry_url,
+                                                               "subject": subject, "error": str(e)})
+                return False
+            log.info("schema_registered", extra={"subject": subject, "schema_id": schema_id})
         self.serializer = AvroSerializer(client, self.validator.schema_str)
         self.serialization_context = SerializationContext(self.kafka_topic.name, MessageField.VALUE)
-        log.info("schema_registered", extra={"subject": subject, "schema_id": schema_id})
+        self.dlq_serializer = AvroSerializer(client, self.dlq_schema_str)
+        self.dlq_context = SerializationContext(self.dlq_topic.name, MessageField.VALUE)
         return True
 
     def start_mqtt(self) -> bool:
@@ -220,19 +246,13 @@ class Bridge:
         try:
             record = self.validator.validate(mqtt_topic, payload)
         except InvalidMessage as e:
-            self.stats.invalid[e.reason] += 1
-            log.warning("message_invalid", extra={"mqtt_topic": mqtt_topic, "reason": e.reason, "detail": e.detail,
-                                                  "payload_bytes": len(payload)})
-            # TODO(phase-2): produce the raw payload and the reason to the
-            # dead-letter topic (config/topics.yaml: kafka.telemetry_dlq)
-            # instead of dropping it.
+            self.dead_letter(mqtt_topic, payload, e.reason, e.detail)
             return
 
         try:
             value = self.serializer(record, self.serialization_context)
         except SerializationError as e:
-            self.stats.invalid["serialization_error"] += 1
-            log.error("message_serialization_failed", extra={"mqtt_topic": mqtt_topic, "error": str(e)})
+            self.dead_letter(mqtt_topic, payload, "serialization_error", str(e))
             return
 
         source_ts = record["ts"].timestamp()
@@ -261,6 +281,54 @@ class Bridge:
                 # Local queue full: serve delivery reports, then retry.
                 self.producer.poll(0.5)
         self.stats.produced += 1
+        self.producer.poll(0)
+
+    def dead_letter(self, mqtt_topic: str, payload: bytes, reason: str, detail: str) -> None:
+        """Produce a rejected MQTT message, intact, to telemetry.dlq.
+
+        The key is the asset_id named by the MQTT topic, which does not depend
+        on the payload; None when the topic does not match the template. A
+        failed dead-letter send is logged at ERROR with the payload in base64
+        and the bridge carries on: an MQTT message cannot be fetched again, so
+        stopping would not save it (the alarm consumer, reading Kafka, stops
+        instead; see the module docstring).
+        """
+        self.stats.invalid[reason] += 1
+        key = self.validator.topics.asset_id(mqtt_topic)
+        context = {"reason": reason, "detail": detail[:DETAIL_MAX], "source": "bridge", "mqtt_topic": mqtt_topic,
+                   "key": key, "payload_bytes": len(payload)}
+
+        def failed(error: str) -> None:
+            self.stats.dlq_failed += 1
+            log.error("dlq_delivery_failed", extra={**context, "error": error,
+                                                    "payload_b64": base64.b64encode(payload).decode("ascii")})
+
+        record = {
+            "payload": payload, "reason": reason, "detail": detail[:DETAIL_MAX], "source": "bridge",
+            "source_topic": mqtt_topic, "source_partition": None, "source_offset": None, "source_key": None,
+            "schema_id": None, "ts": datetime.now(timezone.utc),
+        }
+        try:
+            value = self.dlq_serializer(record, self.dlq_context)
+        except SerializationError as e:
+            failed(f"cannot serialise the dead letter: {e}")
+            return
+
+        def on_delivery(err, msg):
+            if err is not None:
+                failed(str(err))
+                return
+            self.stats.dlq_delivered += 1
+            log.warning("message_dead_lettered", extra={**context, "topic": msg.topic(), "partition": msg.partition(),
+                                                        "offset": msg.offset()})
+
+        while True:
+            try:
+                self.producer.produce(self.dlq_topic.name, key=key.encode("utf-8") if key else None, value=value,
+                                      on_delivery=on_delivery)
+                break
+            except BufferError:
+                self.producer.poll(0.5)
         self.producer.poll(0)
 
     def run(self, stop: threading.Event) -> str:
@@ -296,7 +364,7 @@ class Bridge:
         remaining = self.producer.flush(self.args.flush_timeout) if self.producer is not None else 0
         summary = {"reason": reason, **self.stats.as_dict(), "messages_unprocessed": unprocessed,
                    "messages_undelivered_at_exit": remaining}
-        complete = remaining == 0 and self.stats.delivery_failed == 0
+        complete = remaining == 0 and self.stats.delivery_failed == 0 and self.stats.dlq_failed == 0
         if reason == "startup_failed":
             log.info("shutdown_after_startup_failure", extra=summary)
         elif complete:

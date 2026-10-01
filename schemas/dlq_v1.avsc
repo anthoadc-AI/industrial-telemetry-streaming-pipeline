@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "DeadLetter",
+  "namespace": "industrial_telemetry",
+  "doc": "A message a pipeline component could not process, kept intact with the reason. Version 1. The source data is synthetic.",
+  "fields": [
+    {"name": "payload", "type": "bytes", "doc": "The original message bytes, exactly as received."},
+    {"name": "reason", "type": "string", "doc": "Machine-readable reason code, for example invalid_json, schema_mismatch, non_finite_value, undecodable, missing_field."},
+    {"name": "detail", "type": "string", "doc": "Human-readable detail, truncated to 1000 characters."},
+    {"name": "source", "type": "string", "doc": "Component that rejected the message: bridge or alarm_consumer."},
+    {"name": "source_topic", "type": "string", "doc": "Topic the message came from: the MQTT topic for the bridge, the Kafka topic for the alarm consumer."},
+    {"name": "source_partition", "type": ["null", "int"], "default": null, "doc": "Kafka partition of the original message; null for MQTT."},
+    {"name": "source_offset", "type": ["null", "long"], "default": null, "doc": "Kafka offset of the original message; null for MQTT."},
+    {"name": "source_key", "type": ["null", "bytes"], "default": null, "doc": "Kafka key of the original message, when it had one; null for MQTT."},
+    {"name": "schema_id", "type": ["null", "int"], "default": null, "doc": "Schema Registry id read from the payload's Confluent wire-format header, when it has one."},
+    {"name": "ts", "type": {"type": "long", "logicalType": "timestamp-millis"}, "doc": "When the component rejected the message, UTC."}
+  ]
+}

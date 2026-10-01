@@ -48,13 +48,18 @@ Invalid messages (schema mismatch, missing fields) → telemetry.dlq + log + met
 
 ### S2: Dead-Letter Topic
 
-**Specification:**
-- Topic: `telemetry.dlq` (1 partition, retention 7 days)
-- Message format: `{ original_bytes: "<base64>", error: "<reason>", bridge_ts: <ms> }`
-- Trigger: bridge validation failure (required fields, type mismatch, NaN, bounds)
-- Logging: structured JSON, level WARN, includes original key/value (redacted if secrets suspected)
+**Specification (owner decisions of Task 2.3 STEP 0, 2026-10-01):**
+- Topic: `telemetry.dlq`, 1 partition, `cleanup.policy=delete`, `retention.ms=604800000` (7 days), declared in `config/topics.yaml`
+- Format: Avro, schema `dlq_v1` registered at startup (fail fast), same rigor as the other topics
+- Fields: `payload` (bytes, original message intact), `reason` (machine code), `detail` (human text, truncated to 1000 chars), `source` (`bridge` | `alarm_consumer`), `source_topic`, `source_partition` and `source_offset` (`["null","int"]`/`["null","long"]`, null from the bridge), `schema_id` (`["null","int"]`), `ts` (timestamp-millis)
+- Key: `asset_id` when known without trusting the payload (MQTT topic segment in the bridge, Kafka key in the consumer), else null
+- Reasons from the bridge: `invalid_json`, `invalid_ts`, `schema_mismatch`, `topic_mismatch`, `serialization_error`, `non_finite_value`, `out_of_range` (physical ranges from `config/telemetry.yaml`, single source of truth)
+- Reasons from the consumer: permanent decode failures (`undecodable`), broken contract after decode (`missing_field`). Transient Schema Registry failures are infrastructure errors: they stop the handler without committing the offset and never go to the DLQ
+- Send failure to the DLQ: in the consumer it blocks like an alarm send (offset not committed, exit 1, reprocessed on restart); in the bridge it is logged at ERROR with the payload base64-encoded in the log line and the bridge moves on, exiting 1 at the end (MQTT cannot be re-asked for the message; stopping would cut valid telemetry). The asymmetry is documented in both code paths
+- Logging: every DLQ produce is a WARN structured line with `reason`, `source`, key, and coordinates
+- Messages from an asset without rules are valid and are only counted, not dead-lettered
 
-**No consumer** in Phase 2; Phase 3 may add a monitor.
+**No consumer** of the DLQ in Phase 2; `scripts/smoke/alarms_dump.py` is extended to dump it.
 
 ### S3: Structured Logging
 
@@ -160,20 +165,16 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 - `@kafkajs/confluent-schema-registry` for Avro decode (`telemetry.raw`) and encode (`alarm_v1` to `telemetry.alarms`), against the same Schema Registry the bridge uses
 - `yaml` (to parse config/alarms.yaml)
 
-**Design Notes:**
-- Read `config/alarms.yaml` on startup; fail fast if missing or invalid
-- For each asset, maintain: Map of active_alarms (rule_id → state)
-- On each `telemetry.raw` message:
-  1. Parse and validate against schema (reuse bridge validation helper)
-  2. Extract numeric values (temperature, vibration, etc.)
-  3. For each rule in `config/alarms.yaml` matching this asset:
-     - Evaluate threshold (e.g., `temperature > 80`)
-     - Apply hysteresis (don't re-trigger within N seconds)
-     - Track state in Map (triggered_at, debounce_until)
-     - If state changed: produce an `alarm_v1` record to `telemetry.alarms` (`alarm_id`, `asset_id`, `channel`, `severity`, `state`, `ts`, `value`, ...); the rule is (`asset_id`, `channel`), not a `rule_id` field
-  4. Invalid messages: produce to `telemetry.dlq`, log WARN
-- Periodic cleanup: remove alarms older than persistence window (default 1 hour) with setInterval
-- On SIGTERM: flush pending alarms, close Kafka, exit 0
+**Design Notes (as implemented; owner decisions of STEP 0, 2026-10-01):**
+- Read `config/alarms.yaml` on startup via `config_loader.js`; fail fast if missing or invalid. Rules resolve identically to Python `load_config().alarms.rules` (cross-language test).
+- One state machine per `(asset_id, channel, severity)`: 15 rules x 2 levels = 30 independent HI/HIHI alarms (ISA-18.2 pattern). States NORMAL and ACTIVE.
+- NORMAL -> ACTIVE after `persistence_samples` consecutive samples at or above the threshold; emits RAISED. ACTIVE -> NORMAL after `persistence_samples` consecutive samples below threshold minus `hysteresis`; emits CLEARED with the same `alarm_id`.
+- Consecutiveness breaks on a `seq` gap, a `seq` rollback, or a null value: pending counters reset, ACTIVE state untouched. No time-based debounce, no periodic cleanup; persistence is counted in samples as the YAML defines it.
+- `alarm_id` is deterministic: `asset_id/channel/severity/<ts of RAISED>`. It is the Kafka message key; `telemetry.alarms` is compacted on it.
+- On startup the consumer rebuilds ACTIVE alarms from `telemetry.alarms` before consuming `telemetry.raw`; it refuses to start if the topic is not compacted.
+- At-least-once: decode -> update state -> `await producer.send()` (acks -1, idempotent) -> handler returns; the offset is committed only after the alarm is accepted. Reprocessing after a crash is absorbed by the rebuilt state and the deterministic `alarm_id`.
+- Invalid messages: produced to `telemetry.dlq` (Task 2.3), logged WARN.
+- On SIGTERM/SIGINT: finish the in-flight handler, disconnect, exit 0.
 
 **Verification (manual before tests):**
 - Run consumer against Kafka (from Phase 1 stack, no simulator)
@@ -190,10 +191,11 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 ### Task 2.3: Implement Dead-Letter Topic
 
 **Steps:**
-1. Ensure `docker-compose.yml` topic provisioning creates `telemetry.dlq` (1 partition, 1 min retention for now, changed in Phase 3)
-2. Bridge validation: on error, produce to DLQ with `{ original_bytes, error, bridge_ts }` (base64 the bytes)
-3. Consumer validation: on error, produce to DLQ, same format
-4. Logging: every DLQ produce includes WARN-level structured log with component, error reason, original key
+1. `config/topics.yaml` + `provision.py`: `telemetry.dlq` with 1 partition, delete policy, 7-day retention; warn if an existing topic differs
+2. `schemas/dlq_v1.avsc` and its entry in the schema versioning policy
+3. Bridge: register `dlq_v1` at startup; on validation or serialization failure produce to the DLQ with the reason codes above; add `non_finite_value` and `out_of_range` checks to `validation.py`
+4. Consumer: split `message_undecodable` into permanent decode failure (DLQ), transient registry failure (stop, no commit), and `missing_field` (DLQ); produce to the DLQ before committing the offset
+5. Extend `alarms_dump.py` (or add `dlq_dump.py`) to decode and print DLQ records with the payload shown as base64
 
 **Verification:**
 - Smoke test with 1 intentional malformed message

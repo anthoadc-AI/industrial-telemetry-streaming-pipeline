@@ -7,7 +7,8 @@ under the default subject naming, `<topic>-value`.
 | File | Record | Topic |
 |---|---|---|
 | `telemetry_v1.avsc` | `industrial_telemetry.Telemetry` | `telemetry.raw` |
-| `alarm_v1.avsc` | `industrial_telemetry.Alarm` | `telemetry.alarms` (Phase 2) |
+| `alarm_v1.avsc` | `industrial_telemetry.Alarm` | `telemetry.alarms` |
+| `dlq_v1.avsc` | `industrial_telemetry.DeadLetter` | `telemetry.dlq` |
 
 ## Versioning policy
 
@@ -31,5 +32,7 @@ under the default subject naming, `<topic>-value`.
 - Channel fields carry their unit in the name (`_c`, `_mm_s`, `_a`, `_rpm`)
   and are nullable with a `null` default, so an asset that lacks a sensor
   sends `null` rather than a made-up value.
-- Every record has a `synthetic` flag. All data in this project is
-  synthetic.
+- Every telemetry and alarm record has a `synthetic` flag. All data in
+  this project is synthetic.
+- `dlq_v1` carries the rejected message as `bytes`, untouched; it is shown
+  as base64 only in logs and in `scripts/smoke/dlq_dump.py`.

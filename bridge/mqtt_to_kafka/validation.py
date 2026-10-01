@@ -10,7 +10,14 @@ A payload is accepted only if all of the following hold:
    this, so it is checked here);
 4. it validates against the schema with fastavro: every required field
    present, every value of the declared type;
-5. its ``asset_id`` equals the asset named by the MQTT topic.
+5. no numeric value is NaN or infinite: Python's json module accepts the
+   literals NaN, Infinity and -Infinity, and an Avro double can carry
+   them, so the schema check alone lets them through;
+6. its ``asset_id`` equals the asset named by the MQTT topic.
+
+There is no range check: config/telemetry.yaml defines the units of each
+channel but no physical limits, so out-of-range values have no source of
+truth to be checked against.
 
 Any failure raises ``InvalidMessage`` with a short machine-readable reason and
 a human-readable detail.
@@ -19,6 +26,7 @@ a human-readable detail.
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -83,6 +91,10 @@ class TelemetryValidator:
             validate(record, self.parsed, raise_errors=True)
         except ValidationError as e:
             raise InvalidMessage("schema_mismatch", "; ".join(str(err) for err in e.errors) or str(e)) from None
+
+        non_finite = sorted(k for k, v in record.items() if isinstance(v, float) and not math.isfinite(v))
+        if non_finite:
+            raise InvalidMessage("non_finite_value", f"NaN or infinite value in field(s) {non_finite}")
 
         topic_asset = self.topics.asset_id(mqtt_topic)
         if topic_asset != record["asset_id"]:
