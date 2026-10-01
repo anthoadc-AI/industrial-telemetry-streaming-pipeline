@@ -1,0 +1,28 @@
+# Tool configuration only: this repository is not a Python package.
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.coverage.run]
+branch = true
+# Application code measured for the Phase 2 unit-test threshold (owner
+# decisions, Task 2.4). scripts/smoke/ holds manual verification tools and
+# is not measured.
+include = [
+    "common/*.py",
+    "config/*.py",
+    "edge/simulator/*.py",
+    "bridge/*.py",
+    "bridge/mqtt_to_kafka/*.py",
+    "broker/*.py",
+    "broker/kafka/*.py",
+    "scripts/check_secrets.py",
+    "scripts/thingsboard/*.py",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_empty = true

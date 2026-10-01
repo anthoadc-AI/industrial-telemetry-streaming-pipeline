@@ -116,7 +116,11 @@ def set_compatibility(registry_url: str) -> bool:
     return True
 
 
-def main() -> int:
+# Orchestration entry point: wires real MQTT, Kafka and Schema Registry
+# clients and runs until stopped. Exercised by the integration tests
+# (Task 2.5), not by unit tests; excluded from unit coverage by owner
+# decision (Task 2.4), the only exclusion in this file.
+def main() -> int:  # pragma: no cover
     jsonlog.configure("INFO")
     try:
         load_config()

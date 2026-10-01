@@ -384,7 +384,11 @@ def install_signal_handlers(stop: threading.Event) -> None:
             signal.signal(getattr(signal, name), handler)
 
 
-def main(argv: list[str] | None = None) -> int:
+# Orchestration entry point: wires real MQTT, Kafka and Schema Registry
+# clients and runs until stopped. Exercised by the integration tests
+# (Task 2.5), not by unit tests; excluded from unit coverage by owner
+# decision (Task 2.4), the only exclusion in this file.
+def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     args = parse_args(argv)
     jsonlog.configure(args.log_level)
     try:

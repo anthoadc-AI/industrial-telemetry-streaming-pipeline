@@ -15,6 +15,7 @@ Requires node on PATH and the npm dependencies installed (npm ci).
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -48,6 +49,11 @@ BROKEN = [
     ("missing per-asset current thresholds", "alarms.yaml", "  pump-02:\n    motor_current_a: {warning: 31.5, critical: 36.0}\n", ""),
     ("alarm on an unknown channel", "alarms.yaml", "  vibration_rms_mm_s:\n    direction: high", "  oil_pressure_bar:\n    direction: high"),
     ("negative hysteresis", "alarms.yaml", "hysteresis: 0.3", "hysteresis: -0.3"),
+    # Found by the Task 2.4 unit tests: Python accepted an empty list here,
+    # Node.js rejected it.
+    # "re:" marks a regular expression: the whole overrides block, to the end
+    # of the file, becomes an empty list.
+    ("asset_overrides as an empty list", "alarms.yaml", r"re:asset_overrides:\n.*\Z", "asset_overrides: []\n"),
 ]
 
 
@@ -77,8 +83,13 @@ def broken_copy(workdir: Path, file: str, old: str, new: str) -> Path:
     shutil.copytree(REPO_ROOT / "config", target, ignore=shutil.ignore_patterns("__pycache__", "*.py"))
     path = target / file
     text = path.read_text(encoding="utf-8")
-    assert old in text, f"test fixture out of date: {old!r} not in {file}"
-    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    if old.startswith("re:"):
+        changed, n = re.subn(old[3:], lambda m: new, text, count=1, flags=re.DOTALL)
+        assert n == 1, f"test fixture out of date: {old!r} matches nothing in {file}"
+    else:
+        assert old in text, f"test fixture out of date: {old!r} not in {file}"
+        changed = text.replace(old, new, 1)
+    path.write_text(changed, encoding="utf-8")
     return target
 
 

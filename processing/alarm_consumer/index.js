@@ -72,6 +72,11 @@ function parseCli(argv) {
   };
 }
 
+// Orchestration entry point: wires real Kafka and Schema Registry clients and
+// runs until stopped. Exercised by the integration tests (Task 2.5), not by
+// unit tests; excluded from unit coverage by owner decision (Task 2.4), the
+// only exclusion in this file. parseCli above is unit-tested.
+/* c8 ignore start */
 async function main() {
   jsonlog.configure({ level: 'INFO' });
   // Node.js prints process warnings to stderr in its own format; route them
@@ -197,9 +202,14 @@ async function main() {
   return null; // keep running; a stop path exits the process
 }
 
-main().then((code) => {
-  if (code !== null && code !== undefined) process.exit(code);
-}).catch((e) => {
-  log.exception('unexpected_error', e);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().then((code) => {
+    if (code !== null && code !== undefined) process.exit(code);
+  }).catch((e) => {
+    log.exception('unexpected_error', e);
+    process.exit(1);
+  });
+}
+/* c8 ignore stop */
+
+module.exports = { parseCli, USAGE };
