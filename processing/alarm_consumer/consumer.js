@@ -176,6 +176,11 @@ async function runConsumer({ kafka, registry, engine, groupId, rawTopic, alarmsT
 }
 
 function createProducer(kafka) {
+  // kafkajs logs "Limiting retries for the idempotent producer may invalidate
+  // EoS guarantees" because the client's retries are bounded (5). That is
+  // intended: nothing here relies on producer exactly-once, and a send that
+  // exhausts its retries must fail the handler so the consumer stops without
+  // committing, instead of blocking it indefinitely.
   return kafka.producer({
     idempotent: true,
     maxInFlightRequests: 1,
