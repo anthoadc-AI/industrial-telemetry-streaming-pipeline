@@ -170,6 +170,13 @@ async function readActiveAlarms({ kafka, admin, registry, alarmsTopic, log }) {
  * verdict. Only an explicit HTTP 404 (schema id not found) from the registry
  * counts as permanent: the HTTP client reports network failures as responses
  * too, so no other status proves the message is at fault.
+ *
+ * Evidence (Task 2.3 verification, 2026-10-01): with the Schema Registry
+ * container stopped, resolving a schema id failed with "Error, status 400".
+ * Had any 4xx been treated as permanent, that valid telemetry record would
+ * have been dead-lettered and its offset committed, losing it from the
+ * pipeline. Classified as transient, the consumer stopped with the offset
+ * uncommitted (lag 1), and a restart with the registry back processed it.
  */
 async function decodeTelemetry(registry, value) {
   const deadLetter = (reason, detail, schemaId) => ({ deadLetter: { reason, detail, schemaId } });
