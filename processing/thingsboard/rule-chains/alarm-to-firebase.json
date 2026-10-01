@@ -1,0 +1,61 @@
+{
+  "ruleChain": {
+    "name": "AlarmToFirebase",
+    "type": "CORE",
+    "firstRuleNodeId": null,
+    "root": false,
+    "debugMode": false,
+    "configuration": null,
+    "additionalInfo": {
+      "description": ""
+    }
+  },
+  "metadata": {
+    "version": 4,
+    "firstNodeIndex": 0,
+    "nodes": [
+      {
+        "type": "org.thingsboard.rule.engine.rest.TbRestApiCallNode",
+        "name": "AlarmToFirebase",
+        "debugSettings": {
+          "failuresEnabled": false,
+          "allEnabled": false,
+          "allEnabledUntil": 1787791800808
+        },
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 3,
+        "configuration": {
+          "restEndpointUrlPattern": "${FIREBASE_DB_URL}/alarm.json",
+          "requestMethod": "POST",
+          "useSimpleClientHttpFactory": false,
+          "parseToPlainText": false,
+          "ignoreRequestBody": false,
+          "enableProxy": false,
+          "useSystemProxyProperties": false,
+          "proxyScheme": null,
+          "proxyHost": null,
+          "proxyPort": 0,
+          "proxyUser": null,
+          "proxyPassword": null,
+          "readTimeoutMs": 0,
+          "maxParallelRequestsCount": 0,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "credentials": {
+            "type": "anonymous"
+          },
+          "maxInMemoryBufferSizeInKb": 256
+        },
+        "additionalInfo": {
+          "description": "",
+          "layoutX": 322,
+          "layoutY": 149
+        }
+      }
+    ],
+    "connections": null,
+    "ruleChainConnections": null
+  }
+}

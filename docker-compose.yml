@@ -1,0 +1,134 @@
+# Local stack for the industrial telemetry streaming pipeline.
+#
+#   edge simulator --MQTT--> mosquitto --bridge--> broker (Kafka) + schema-registry
+#   thingsboard: rule chains imported from processing/thingsboard/rule-chains
+#
+# Bring it up with `make up`, which also creates the Kafka topics, sets the
+# Schema Registry compatibility and imports the ThingsBoard rule chains.
+# Stop it with `make down` (never with -v, which deletes the ThingsBoard
+# volume).
+#
+# Profiles: "firebase" is reserved for the optional Firebase sink, which is
+# disabled by default and has no service yet. Services added under it run
+# only with `--profile firebase` or COMPOSE_PROFILES=firebase.
+#
+# Host ports come from .env (see .env.example), with the defaults shown.
+# No service has a restart policy: nothing comes back by itself after a
+# Docker Desktop restart.
+
+name: industrial-telemetry
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.1.2-alpine
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    volumes:
+      - ./broker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "localhost", "-t", "$$SYS/broker/version", "-C", "1", "-W", "5"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:6.1.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    # ZooKeeper and Kafka keep their data in tmpfs, so every container start
+    # begins from a clean state. Phase 0 reproduced a broker that refused to
+    # start on a stale /brokers/ids znode left by an unclean stop; with tmpfs
+    # that state cannot survive. Kafka holds nothing irreplaceable here, and
+    # `make up` recreates the topics.
+    tmpfs:
+      - /var/lib/zookeeper/data:uid=1000,gid=1000
+      - /var/lib/zookeeper/log:uid=1000,gid=1000
+    healthcheck:
+      test: ["CMD", "cub", "zk-ready", "localhost:2181", "5"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 10s
+
+  broker:
+    image: confluentinc/cp-server:6.1.1
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
+      # Topics are created explicitly from config/topics.yaml by `make up`;
+      # a typo in a topic name must fail, not create a new topic.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # No telemetry to Confluent, and no metrics reporter: Control Center,
+      # its only consumer, is not part of this stack.
+      KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE: "false"
+      CONFLUENT_METRICS_ENABLE: "false"
+    tmpfs:
+      - /var/lib/kafka/data:uid=1000,gid=1000
+    healthcheck:
+      test: ["CMD", "cub", "kafka-ready", "-b", "localhost:9092", "1", "5"]
+      interval: 10s
+      timeout: 15s
+      retries: 10
+      start_period: 20s
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:6.1.1
+    depends_on:
+      broker:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "broker:29092"
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8081/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  thingsboard:
+    image: thingsboard/tb-postgres:4.2.1.1
+    ports:
+      - "${TB_HTTP_PORT:-8080}:9090"
+      - "${TB_MQTT_PORT:-9883}:1883"
+    environment:
+      TB_QUEUE_TYPE: in-memory
+    # Named volumes, never the coursework's ~/.mytb-data bind mount. On the
+    # first start with an empty volume, the image installs its database with
+    # demo data, which includes the tenant account used by the import script.
+    volumes:
+      - tb-data:/data
+      - tb-logs:/var/log/thingsboard
+    healthcheck:
+      # The first-start installer also serves /login on 9090 while it runs, so
+      # /login alone reports healthy too early. The image writes
+      # /data/.firstlaunch only after a successful install; requiring it means
+      # only the real server can pass.
+      test: ["CMD-SHELL", "test -f /data/.firstlaunch && wget -q -O /dev/null http://localhost:9090/login"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      # The first start installs the database, which takes minutes.
+      start_period: 300s
+
+volumes:
+  tb-data:
+  tb-logs:
