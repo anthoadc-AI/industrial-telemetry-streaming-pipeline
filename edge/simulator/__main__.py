@@ -36,8 +36,8 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
+from common import jsonlog
 from config.loader import ConfigError, load_config, validate_fault
-from edge.simulator import jsonlog
 from edge.simulator.model import AssetModel
 
 log = logging.getLogger("edge.simulator")

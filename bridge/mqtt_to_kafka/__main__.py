@@ -53,8 +53,8 @@ import paho.mqtt.client as mqtt
 from confluent_kafka import KafkaException, Producer
 from confluent_kafka.serialization import SerializationError
 
-from bridge.mqtt_to_kafka import jsonlog
 from bridge.mqtt_to_kafka.validation import InvalidMessage, TelemetryValidator
+from common import jsonlog
 from config.loader import ConfigError, load_config
 
 log = logging.getLogger("bridge.mqtt_to_kafka")
