@@ -210,7 +210,11 @@ def ensure_device(tb: ThingsBoard, token: str) -> None:
     log.info("device_token_updated", extra={"device": DEMO_DEVICE})
 
 
-def main() -> int:
+# Orchestration entry point: wires real MQTT, Kafka and Schema Registry
+# clients and runs until stopped. Exercised by the integration tests
+# (Task 2.5), not by unit tests; excluded from unit coverage by owner
+# decision (Task 2.4), the only exclusion in this file.
+def main() -> int:  # pragma: no cover
     jsonlog.configure("INFO")
     username = setting("TB_TENANT_USERNAME")
     tenant_pw = setting("TB_TENANT_PASSWORD")

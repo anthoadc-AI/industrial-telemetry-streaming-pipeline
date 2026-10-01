@@ -9,11 +9,16 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "alarm-consumer": "node processing/alarm_consumer/index.js"
+    "alarm-consumer": "node processing/alarm_consumer/index.js",
+    "test": "jest",
+    "test:coverage": "jest --coverage"
   },
   "dependencies": {
     "@kafkajs/confluent-schema-registry": "4.1.0",
     "kafkajs": "2.2.4",
     "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "jest": "30.5.2"
   }
 }
