@@ -200,17 +200,20 @@ function parseTopics(data, env) {
 
 /**
  * Load and validate the configuration the alarm consumer needs.
- * Returns { rules, topics, alarmSchema } where rules is the ordered list of
- * resolved rules (one per alarmed asset/channel) and alarmSchema the text of
- * the telemetry_alarms value schema.
+ * Returns { rules, topics, alarmSchema, dlqSchema } where rules is the ordered
+ * list of resolved rules (one per alarmed asset/channel), and alarmSchema and
+ * dlqSchema the text of the telemetry_alarms and telemetry_dlq value schemas.
  */
 function loadConfig({ configDir = CONFIG_DIR, env = process.env } = {}) {
   const telemetry = parseTelemetry(readYaml(configDir, 'telemetry.yaml'));
   const rules = parseAlarms(readYaml(configDir, 'alarms.yaml'), telemetry);
   const topics = parseTopics(readYaml(configDir, 'topics.yaml'), env);
-  if (!topics.telemetry_alarms.valueSchemaPath) throw new ConfigError('topics.yaml.kafka.telemetry_alarms.value_schema: required');
+  for (const key of ['telemetry_alarms', 'telemetry_dlq']) {
+    if (!topics[key].valueSchemaPath) throw new ConfigError(`topics.yaml.kafka.${key}.value_schema: required`);
+  }
   const alarmSchema = fs.readFileSync(topics.telemetry_alarms.valueSchemaPath, 'utf8');
-  return { rules, topics, alarmSchema };
+  const dlqSchema = fs.readFileSync(topics.telemetry_dlq.valueSchemaPath, 'utf8');
+  return { rules, topics, alarmSchema, dlqSchema };
 }
 
 module.exports = { loadConfig, ConfigError, CONFIG_DIR };

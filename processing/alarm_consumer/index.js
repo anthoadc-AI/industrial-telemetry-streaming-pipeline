@@ -6,10 +6,11 @@
  *   node processing/alarm_consumer/index.js --count 500
  *
  * Start-up, failing fast with exit 1 at the first problem:
- *   1. load config/ (rules, topics, alarm schema);
- *   2. connect to Kafka; both topics must exist and telemetry.alarms must
- *      carry the settings in config/topics.yaml (cleanup.policy=compact);
- *   3. register alarm_v1 under telemetry.alarms-value in Schema Registry;
+ *   1. load config/ (rules, topics, alarm and dead-letter schemas);
+ *   2. connect to Kafka; telemetry.raw, telemetry.alarms and telemetry.dlq
+ *      must exist, and telemetry.alarms must carry the settings in
+ *      config/topics.yaml (cleanup.policy=compact);
+ *   3. register alarm_v1 and dlq_v1 in Schema Registry;
  *   4. rebuild the active alarms from telemetry.alarms (latest event per
  *      alarm_id), so a restart neither re-raises an active alarm nor
  *      orphans it;
@@ -18,7 +19,8 @@
  * Stopping: after --count processed telemetry messages, after --duration
  * seconds, or on SIGINT, SIGTERM or (Windows) SIGBREAK. The consumer then
  * stops, commits the offsets of the messages it has finished, and exits 0.
- * A failed alarm send exits 1 without committing that message (see
+ * A failed alarm or dead-letter send, or a Schema Registry that cannot be
+ * reached while decoding, exits 1 without committing that message (see
  * consumer.js). Invalid arguments exit 2.
  *
  * Logging: JSON lines on stderr through common/jsonlog.js, including
@@ -96,6 +98,7 @@ async function main() {
   }
   const rawTopic = config.topics.telemetry_raw.name;
   const alarmsTopic = config.topics.telemetry_alarms.name;
+  const dlqTopic = config.topics.telemetry_dlq.name;
   const engine = new AlarmEngine(config.rules);
 
   const kafka = kafkaSide.createKafka({ brokers: args.brokers, clientId: `alarm-consumer-${process.pid}`, debug: args.logLevel === 'DEBUG' });
@@ -103,7 +106,7 @@ async function main() {
   const producer = kafkaSide.createProducer(kafka);
   const registry = kafkaSide.createRegistry(args.registryUrl);
   const counters = {
-    messages_processed: 0, messages_undecodable: 0, messages_without_rules: 0,
+    messages_processed: 0, messages_dead_lettered: 0, messages_without_rules: 0,
     alarms_restored: 0, alarms_raised: 0, alarms_cleared: 0,
   };
 
@@ -135,16 +138,19 @@ async function main() {
   // Start-up, fail fast.
   try {
     await admin.connect();
-    await kafkaSide.checkTopics(admin, { rawTopic, alarmsTopic, alarmsConfigs: config.topics.telemetry_alarms.configs });
-    log.info('kafka_ready', { brokers: args.brokers, raw_topic: rawTopic, alarms_topic: alarmsTopic });
+    await kafkaSide.checkTopics(admin, { rawTopic, alarmsTopic, dlqTopic, alarmsConfigs: config.topics.telemetry_alarms.configs });
+    log.info('kafka_ready', { brokers: args.brokers, raw_topic: rawTopic, alarms_topic: alarmsTopic, dlq_topic: dlqTopic });
   } catch (e) {
     log.error('kafka_not_ready', { brokers: args.brokers, error: e.message });
     return stop('startup_failed', 1);
   }
   let alarmSchemaId;
+  let dlqSchemaId;
   try {
-    alarmSchemaId = await kafkaSide.registerAlarmSchema(registry, { alarmsTopic, alarmSchema: config.alarmSchema });
+    alarmSchemaId = await kafkaSide.registerSchema(registry, { topic: alarmsTopic, schema: config.alarmSchema });
     log.info('schema_registered', { subject: `${alarmsTopic}-value`, schema_id: alarmSchemaId });
+    dlqSchemaId = await kafkaSide.registerSchema(registry, { topic: dlqTopic, schema: config.dlqSchema });
+    log.info('schema_registered', { subject: `${dlqTopic}-value`, schema_id: dlqSchemaId });
   } catch (e) {
     log.error('schema_registration_failed', { url: args.registryUrl, error: e.message });
     return stop('startup_failed', 1);
@@ -164,7 +170,8 @@ async function main() {
 
   try {
     consumer = await kafkaSide.runConsumer({
-      kafka, registry, engine, groupId: args.groupId, rawTopic, alarmsTopic, alarmSchemaId, producer, counters, log,
+      kafka, registry, engine, groupId: args.groupId, rawTopic, alarmsTopic, alarmSchemaId, dlqTopic, dlqSchemaId,
+      producer, counters, log,
       onProcessed: (n) => {
         if (args.count !== undefined && n >= args.count && !stopping) {
           consumer.pause([{ topic: rawTopic }]);
@@ -181,7 +188,7 @@ async function main() {
     if (!payload.restart) stop('crash', 1).then((code) => process.exit(code));
   });
   log.info('run_started', {
-    group_id: args.groupId, raw_topic: rawTopic, alarms_topic: alarmsTopic, rules: config.rules.length,
+    group_id: args.groupId, raw_topic: rawTopic, alarms_topic: alarmsTopic, dlq_topic: dlqTopic, rules: config.rules.length,
     level_alarms: config.rules.length * 2, count: args.count ?? null, duration_s: args.duration ?? null,
   });
   if (args.duration !== undefined) {

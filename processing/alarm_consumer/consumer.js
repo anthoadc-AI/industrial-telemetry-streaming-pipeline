@@ -26,6 +26,22 @@
  * reader deduplicates them by alarm_id, and compaction keeps one event per
  * key. Transactions would add a transactional producer, read_committed
  * readers and coordinator round-trips for no observable difference here.
+ *
+ * Dead letters: a message that can never be processed goes to telemetry.dlq
+ * (dlq_v1, payload intact) before its offset is committed. Two kinds qualify:
+ * a permanent decode failure (no Confluent wire-format header, a schema id
+ * the registry says does not exist, bytes that do not decode) and a broken
+ * contract after decoding (a required field missing or of the wrong type).
+ * A transient Schema Registry failure (unreachable, timeout, any answer other
+ * than "schema not found") is never dead-lettered: valid telemetry would land
+ * in the DLQ. It stops the handler without committing, like a failed alarm
+ * send, and the message is processed again after a restart.
+ *
+ * The dead-letter send itself is awaited and, if it fails, stops the consumer
+ * without committing, exactly as an alarm send does. The bridge does the
+ * opposite (logs the payload and carries on). The asymmetry follows the
+ * source: this consumer reads Kafka and can re-read an uncommitted offset, so
+ * stopping loses nothing; the bridge reads MQTT, which cannot redeliver.
  */
 
 const { Kafka, logLevel, Partitioners, ConfigResourceTypes } = require('kafkajs');
@@ -34,6 +50,24 @@ const jsonlog = require('../../common/jsonlog');
 
 const KAFKAJS_LEVELS = { [logLevel.ERROR]: 'ERROR', [logLevel.WARN]: 'WARNING', [logLevel.INFO]: 'INFO', [logLevel.DEBUG]: 'DEBUG' };
 const RESTORE_TIMEOUT_MS = 60000;
+const DETAIL_MAX = 1000;
+
+/** A Schema Registry failure that is not a verdict on the message: never dead-lettered. */
+class TransientRegistryError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'TransientRegistryError';
+  }
+}
+
+// Fields the state machines and alarm_v1 need, checked after decoding: the
+// writer schema guarantees its own fields, not that it is telemetry_v1.
+const REQUIRED = [
+  ['asset_id', (v) => typeof v === 'string' && v !== ''],
+  ['seq', (v) => Number.isInteger(v)],
+  ['ts', (v) => typeof v === 'number' && Number.isFinite(v)],
+  ['synthetic', (v) => typeof v === 'boolean'],
+];
 
 /** kafkajs logCreator writing through common/jsonlog.js, so stderr stays JSON lines. */
 function kafkajsLogCreator() {
@@ -55,11 +89,11 @@ function createKafka({ brokers, clientId, debug }) {
 }
 
 /**
- * Fail-fast checks: both topics exist and telemetry.alarms is compacted
+ * Fail-fast checks: the three topics exist and telemetry.alarms is compacted
  * (the state restore depends on it). Throws with a reason on any failure.
  */
-async function checkTopics(admin, { rawTopic, alarmsTopic, alarmsConfigs }) {
-  await admin.fetchTopicMetadata({ topics: [rawTopic, alarmsTopic] });
+async function checkTopics(admin, { rawTopic, alarmsTopic, dlqTopic, alarmsConfigs }) {
+  await admin.fetchTopicMetadata({ topics: [rawTopic, alarmsTopic, dlqTopic] });
   const { resources } = await admin.describeConfigs({
     resources: [{ type: ConfigResourceTypes.TOPIC, name: alarmsTopic }],
     includeSynonyms: false,
@@ -72,11 +106,11 @@ async function checkTopics(admin, { rawTopic, alarmsTopic, alarmsConfigs }) {
   }
 }
 
-async function registerAlarmSchema(registry, { alarmsTopic, alarmSchema }) {
+async function registerSchema(registry, { topic, schema }) {
   // updateConfig false: the global compatibility set by broker/kafka/provision.py
   // governs; no subject-level override is created.
-  const { id } = await registry.register({ type: SchemaType.AVRO, schema: alarmSchema },
-    { subject: `${alarmsTopic}-value`, updateConfig: false });
+  const { id } = await registry.register({ type: SchemaType.AVRO, schema },
+    { subject: `${topic}-value`, updateConfig: false });
   return id;
 }
 
@@ -130,11 +164,47 @@ async function readActiveAlarms({ kafka, admin, registry, alarmsTopic, log }) {
 }
 
 /**
+ * Decode one telemetry.raw value. Returns { sample } for valid telemetry or
+ * { deadLetter: { reason, detail, schemaId } } for a message that can never
+ * be processed; throws TransientRegistryError when the registry cannot give a
+ * verdict. Only an explicit HTTP 404 (schema id not found) from the registry
+ * counts as permanent: the HTTP client reports network failures as responses
+ * too, so no other status proves the message is at fault.
+ */
+async function decodeTelemetry(registry, value) {
+  const deadLetter = (reason, detail, schemaId) => ({ deadLetter: { reason, detail, schemaId } });
+  if (!value || value.length === 0) return deadLetter('undecodable', 'empty value', null);
+  if (value.length < 5 || value[0] !== 0) {
+    return deadLetter('undecodable', `no Confluent wire-format header (magic byte ${value[0]}, ${value.length} bytes)`, null);
+  }
+  const schemaId = value.readInt32BE(1);
+  try {
+    await registry.getSchema(schemaId);
+  } catch (e) {
+    if (e && e.status === 404) return deadLetter('undecodable', `schema id ${schemaId} not found in Schema Registry`, schemaId);
+    throw new TransientRegistryError(`Schema Registry unavailable resolving schema id ${schemaId}: ${e.message}`);
+  }
+  let sample;
+  try {
+    sample = await registry.decode(value);
+  } catch (e) {
+    return deadLetter('undecodable', `Avro decode with schema id ${schemaId} failed: ${e.message}`, schemaId);
+  }
+  const missing = REQUIRED.filter(([field, ok]) => !ok(sample[field])).map(([field]) => field);
+  if (missing.length) {
+    return deadLetter('missing_field',
+      `required field(s) missing or of the wrong type after decoding with schema id ${schemaId}: ${missing.join(', ')}`, schemaId);
+  }
+  return { sample };
+}
+
+/**
  * Consume telemetry.raw and produce alarm transitions. Returns the running
  * kafkajs consumer; onProcessed(count) is called after each processed message
  * so the caller can stop at --count.
  */
-async function runConsumer({ kafka, registry, engine, groupId, rawTopic, alarmsTopic, alarmSchemaId, producer, counters, log, onProcessed }) {
+async function runConsumer({ kafka, registry, engine, groupId, rawTopic, alarmsTopic, alarmSchemaId, dlqTopic, dlqSchemaId,
+  producer, counters, log, onProcessed }) {
   const consumer = kafka.consumer({
     groupId,
     // A failed handler is not retried by kafkajs (see the module comment);
@@ -146,17 +216,46 @@ async function runConsumer({ kafka, registry, engine, groupId, rawTopic, alarmsT
   await consumer.run({
     autoCommit: true,
     eachMessage: async ({ topic, partition, message }) => {
-      let sample;
+      let decoded;
       try {
-        sample = await registry.decode(message.value);
+        decoded = await decodeTelemetry(registry, message.value);
       } catch (e) {
-        counters.messages_undecodable += 1;
-        log.warning('message_undecodable', { topic, partition, offset: message.offset, error: e.message });
-        // TODO(task-2.3): produce the raw bytes, base64, and the reason to telemetry.dlq.
+        if (e instanceof TransientRegistryError) {
+          // Stop without committing; the message is processed after a restart.
+          log.error('schema_registry_unavailable', { topic, partition, offset: message.offset, error: e.message });
+        }
+        throw e;
+      }
+      if (decoded.deadLetter) {
+        const { reason, detail, schemaId } = decoded.deadLetter;
+        const record = {
+          payload: message.value || Buffer.alloc(0),
+          reason,
+          detail: detail.slice(0, DETAIL_MAX),
+          source: 'alarm_consumer',
+          source_topic: topic,
+          source_partition: partition,
+          source_offset: Number(message.offset),
+          source_key: message.key || null,
+          schema_id: schemaId,
+          ts: Date.now(),
+        };
+        // Key: the original Kafka key (the bridge's asset_id), which does not
+        // depend on the payload; null when the message had none. The send is
+        // awaited: a failure stops the consumer without committing (see above).
+        const value = await registry.encode(dlqSchemaId, record);
+        await producer.send({ topic: dlqTopic, acks: -1, messages: [{ key: message.key || null, value }] });
+        counters.messages_dead_lettered += 1;
+        log.warning('message_dead_lettered', {
+          reason, detail: record.detail, source: 'alarm_consumer', key: message.key ? message.key.toString() : null,
+          source_topic: topic, source_partition: partition, source_offset: message.offset, schema_id: schemaId,
+          payload_bytes: record.payload.length,
+        });
         counters.messages_processed += 1;
         onProcessed(counters.messages_processed);
         return;
       }
+      const { sample } = decoded;
       if (!engine.byAsset.has(sample.asset_id)) counters.messages_without_rules += 1;
       for (const event of engine.process(sample)) {
         const value = await registry.encode(alarmSchemaId, event);
@@ -194,4 +293,7 @@ function createRegistry(host) {
   return new SchemaRegistry({ host });
 }
 
-module.exports = { createKafka, createProducer, createRegistry, checkTopics, registerAlarmSchema, readActiveAlarms, runConsumer };
+module.exports = {
+  createKafka, createProducer, createRegistry, checkTopics, registerSchema, readActiveAlarms, runConsumer,
+  decodeTelemetry, TransientRegistryError,
+};
