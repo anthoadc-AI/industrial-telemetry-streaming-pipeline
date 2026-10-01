@@ -23,6 +23,8 @@ from config.loader import load_config  # noqa: E402
 
 
 def main() -> int:
+    # Line-buffered, so progress shows up promptly when output is redirected.
+    sys.stdout.reconfigure(line_buffering=True)
     p = argparse.ArgumentParser(description="Subscribe to an MQTT topic filter and count messages.")
     p.add_argument("--host", default=os.environ.get("MQTT_HOST", "localhost"))
     p.add_argument("--port", type=int, default=int(os.environ.get("MQTT_PORT", "1883")))

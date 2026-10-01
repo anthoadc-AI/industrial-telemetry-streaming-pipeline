@@ -18,6 +18,8 @@ import paho.mqtt.client as mqtt
 
 
 def main() -> int:
+    # Line-buffered, so progress shows up promptly when output is redirected.
+    sys.stdout.reconfigure(line_buffering=True)
     p = argparse.ArgumentParser(description="Publish synthetic test messages to an MQTT broker.")
     p.add_argument("--host", default=os.environ.get("MQTT_HOST", "localhost"))
     p.add_argument("--port", type=int, default=int(os.environ.get("MQTT_PORT", "1883")))
