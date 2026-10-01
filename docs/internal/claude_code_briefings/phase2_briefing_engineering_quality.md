@@ -62,7 +62,7 @@ Invalid messages (schema mismatch, missing fields) → telemetry.dlq + log + met
 **Implementation:**
 - Consolidate `edge/simulator/jsonlog.py` + `bridge/mqtt_to_kafka/jsonlog.py` → shared package `common/jsonlog.py`
 - AlarmConsumer uses the same package
-- Fields: `@timestamp` (ISO 8601 UTC), `level`, `component`, `msg`, contextual fields (asset_id, seq, rule_id, etc.)
+- Fields (as implemented in Task 2.1): `ts` (ISO 8601 UTC, milliseconds, `Z`), `level` (Python level names in both languages), `logger`, `event`, extras flattened into the same object, `exception` when present. Compact JSON, non-ASCII not escaped.
 
 **Verification in tests:** parse stderr lines as JSON, no non-JSON lines present.
 
@@ -154,7 +154,9 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 - `config_loader.js` — Load `config/alarms.yaml` (reuse Python loader or implement in Node)
 
 **Dependencies:**
-- `kafkajs` (already in package.json from Phase 1)
+- `package.json` must be created in this task: the coursework one was removed with the course consumer in Phase 1. Pin exact versions.
+- `kafkajs` for the consumer and producer
+- `@kafkajs/confluent-schema-registry` for Avro decode (`telemetry.raw`) and encode (`alarm_v1` to `telemetry.alarms`), against the same Schema Registry the bridge uses
 - `winston` for structured JSON logging (or simple `console.log` with structured output if preferred)
 - `yaml` (to parse config/alarms.yaml)
 
@@ -317,7 +319,7 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 
 ## Decisions Logged for This Phase
 
-1. **Alarm consumer in Python, same repo** (S1)
+1. **Alarm consumer in Node.js, same repo** (S1; owner decision 2026-10-01, supersedes Phase 0 decision 14)
 2. **DLQ format with base64 payload** (S2)
 3. **Shared logging package** (S3)
 4. **80% coverage target** (S4)
@@ -328,7 +330,7 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 
 ## Outstanding from Phase 1 (Still Open)
 
-- Firebase credential rotation (owner decision)
+- Firebase credential rotation: closed, nothing to rotate (Phase 1 report section 7.1: no Firebase node carried a credential; `FIREBASE_DB_SECRET` has no value to replace)
 - Twelve Airflow/Hadoop containers (owner decision on restart)
 - ThingsBoard first-install healthcheck timing (Phase 2 or 3)
 - `KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE` inert variable cleanup (Phase 2 advisory)
