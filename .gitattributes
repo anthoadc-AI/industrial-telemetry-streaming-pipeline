@@ -12,3 +12,4 @@ Makefile       text eol=lf
 *.js           text eol=lf
 .nvmrc         text eol=lf
 *.toml         text eol=lf
+.python-version text eol=lf

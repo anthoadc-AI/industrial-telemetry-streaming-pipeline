@@ -51,8 +51,9 @@ def test_pipeline_end_to_end(stack, offsets_mark, log_dir):
 
 
 def invalid_mqtt_messages() -> list[tuple[str, bytes]]:
-    good = {"asset_id": "pump-01", "asset_type": "pump", "seq": 0, "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-            "synthetic": True, "bearing_temperature_c": 53.1, "vibration_rms_mm_s": 2.6, "motor_current_a": 25.0,
+    good = {"asset_id": "pump-01", "asset_type": "pump", "seq": 0,
+            "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), "synthetic": True,
+            "bearing_temperature_c": 53.1, "vibration_rms_mm_s": 2.6, "motor_current_a": 25.0,
             "speed_rpm": 2962.0, "injected_fault": None}
     return [
         ("invalid_json", b'{"asset_id": "pump-01", oops'),
@@ -105,7 +106,7 @@ def test_dead_letters_real(stack, offsets_mark, fresh_group, log_dir):
         assert expected[v["payload"]] == v["reason"]
         assert letter["key"] == b"pump-01"
         assert v["source"] == ("alarm_consumer" if v["reason"] in ("undecodable", "missing_field") else "bridge")
-    assert next(l["value"] for l in letters if l["value"]["reason"] == "missing_field")["schema_id"] == no_seq_id
+    assert next(d["value"] for d in letters if d["value"]["reason"] == "missing_field")["schema_id"] == no_seq_id
     # The bridge put nothing on telemetry.raw: the only new records there are the two injected ones.
     assert len(it.read_since("telemetry.raw", offsets_mark["telemetry.raw"], deserialize=False)) == 2
     assert b.non_json_lines() == consumer.non_json_lines() == 0

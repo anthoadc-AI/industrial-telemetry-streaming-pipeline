@@ -280,7 +280,8 @@ def _parse_telemetry(data: Mapping[str, Any]) -> TelemetryConfig:
     for i, a in enumerate(data["assets"]):
         aw = f"{w}.assets[{i}]"
         a = _mapping(a, aw)
-        _keys(a, aw, {"id", "type", "description", "channels", "load", "electrical", "thermal", "vibration", "noise_std"}, {"degradation"})
+        _keys(a, aw, {"id", "type", "description", "channels", "load", "electrical", "thermal", "vibration", "noise_std"},
+              {"degradation"})
         asset_id = _str(a["id"], f"{aw}.id")
         aw = f"{w}.assets[{asset_id}]"
 

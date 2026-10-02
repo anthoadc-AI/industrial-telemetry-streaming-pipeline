@@ -38,7 +38,11 @@ def test_unknown_asset_lookup_raises_key_error(cfg):
         cfg.telemetry.asset("pump-99")
 
 
-@pytest.mark.parametrize("env, expected", [({"TELEMETRY_TOPIC": "x.y"}, "x.y"), ({"TELEMETRY_TOPIC": ""}, "telemetry.raw"), ({}, "telemetry.raw")])
+@pytest.mark.parametrize("env, expected", [
+    ({"TELEMETRY_TOPIC": "x.y"}, "x.y"),
+    ({"TELEMETRY_TOPIC": ""}, "telemetry.raw"),
+    ({}, "telemetry.raw"),
+])
 def test_telemetry_topic_override(env, expected):
     assert load_config(env=env).topics.telemetry_raw.name == expected
 
@@ -76,24 +80,63 @@ CASES = [
     ("telemetry.yaml", "sample_interval_s: 1.0", "sample_interval_s: 1.0\nextra: 1", "telemetry.yaml: unknown key(s) ['extra']"),
     ("telemetry.yaml", "sample_interval_s: 1.0\n", "", "telemetry.yaml: missing key(s) ['sample_interval_s']"),
     ("telemetry.yaml", "sample_interval_s: 1.0", "sample_interval_s: 0", "telemetry.yaml.sample_interval_s: must be > 0"),
-    ("telemetry.yaml", "sample_interval_s: 1.0", "sample_interval_s: true", "telemetry.yaml.sample_interval_s: expected a finite number"),
-    ("telemetry.yaml", "ambient_temperature_c: 25.0", "ambient_temperature_c: .nan", "telemetry.yaml.ambient_temperature_c: expected a finite number"),
+    (
+        "telemetry.yaml",
+        "sample_interval_s: 1.0",
+        "sample_interval_s: true",
+        "telemetry.yaml.sample_interval_s: expected a finite number",
+    ),
+    (
+        "telemetry.yaml",
+        "ambient_temperature_c: 25.0",
+        "ambient_temperature_c: .nan",
+        "telemetry.yaml.ambient_temperature_c: expected a finite number",
+    ),
     ("telemetry.yaml", "  - id: motor-01\n", "  - id: ''\n", "telemetry.yaml.assets[0].id: expected a non-empty string"),
     ("telemetry.yaml", "  - id: motor-02\n", "  - id: motor-01\n", "telemetry.yaml.assets: duplicate asset id"),
-    ("telemetry.yaml", "    load: {base: 0.75,", "    load: {base: 1.5,", "telemetry.yaml.assets[motor-01].load.base: must be <= 1.2"),
-    ("telemetry.yaml", "rated_slip: 0.020", "rated_slip: -0.1", "telemetry.yaml.assets[motor-01].electrical.rated_slip: must be >= 0.0"),
-    ("telemetry.yaml", "time_constant_s: 600}", "time_constant_s: 0}", "telemetry.yaml.assets[motor-01].thermal.time_constant_s: must be > 0"),
+    (
+        "telemetry.yaml",
+        "    load: {base: 0.75,",
+        "    load: {base: 1.5,",
+        "telemetry.yaml.assets[motor-01].load.base: must be <= 1.2",
+    ),
+    (
+        "telemetry.yaml",
+        "rated_slip: 0.020",
+        "rated_slip: -0.1",
+        "telemetry.yaml.assets[motor-01].electrical.rated_slip: must be >= 0.0",
+    ),
+    (
+        "telemetry.yaml",
+        "time_constant_s: 600}",
+        "time_constant_s: 0}",
+        "telemetry.yaml.assets[motor-01].thermal.time_constant_s: must be > 0",
+    ),
     ("telemetry.yaml", "noise_std: {bearing_temperature_c: 0.2, vibration_rms_mm_s: 0.08, motor_current_a: 0.4, speed_rpm: 1.0}",
-     "noise_std: {bearing_temperature_c: 0.2}", "telemetry.yaml.assets[motor-01].noise_std: missing channel(s) ['motor_current_a', 'speed_rpm', 'vibration_rms_mm_s']"),
+     "noise_std: {bearing_temperature_c: 0.2}",
+     "telemetry.yaml.assets[motor-01].noise_std: missing channel(s) ['motor_current_a', 'speed_rpm', 'vibration_rms_mm_s']"),
     ("telemetry.yaml", "degradation: {bearing_temperature_c: 1.5,", "degradation: {oil_c: 1.5,",
      "telemetry.yaml.assets[pump-02].degradation: channel(s) ['oil_c'] not reported by this asset"),
-    ("telemetry.yaml", "    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]\n    load: {base: 0.75",
-     "    channels: [speed_rpm, speed_rpm]\n    load: {base: 0.75", "telemetry.yaml.assets[motor-01].channels: duplicate channel"),
-    ("telemetry.yaml", "    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]\n    load: {base: 0.75",
+    ("telemetry.yaml",
+     "    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]\n    load: {base: 0.75",
+     "    channels: [speed_rpm, speed_rpm]\n    load: {base: 0.75",
+     "telemetry.yaml.assets[motor-01].channels: duplicate channel"),
+    ("telemetry.yaml",
+     "    channels: [bearing_temperature_c, vibration_rms_mm_s, motor_current_a, speed_rpm]\n    load: {base: 0.75",
      "    channels: []\n    load: {base: 0.75", "telemetry.yaml.assets[motor-01].channels: expected a non-empty list"),
     ("telemetry.yaml", "    kind: step", "    kind: pulse", "telemetry.yaml.faults.imbalance.kind: must be 'step' or 'ramp'"),
-    ("telemetry.yaml", "    ramp_s: 180", "    ramp_s: 0", "telemetry.yaml.faults.bearing_overheating.ramp_s: must be > 0 for a ramp"),
-    ("telemetry.yaml", "    channel: vibration_rms_mm_s\n    kind: step", "    channel: oil_c\n    kind: step", "telemetry.yaml.faults.imbalance.channel: unknown channel 'oil_c'"),
+    (
+        "telemetry.yaml",
+        "    ramp_s: 180",
+        "    ramp_s: 0",
+        "telemetry.yaml.faults.bearing_overheating.ramp_s: must be > 0 for a ramp",
+    ),
+    (
+        "telemetry.yaml",
+        "    channel: vibration_rms_mm_s\n    kind: step",
+        "    channel: oil_c\n    kind: step",
+        "telemetry.yaml.faults.imbalance.channel: unknown channel 'oil_c'",
+    ),
     # The next three were accepted before commit 7a29126 (an empty container
     # of the wrong type passed as "absent").
     ("telemetry.yaml", "fault_schedule: []", "fault_schedule: {}", "telemetry.yaml.fault_schedule: expected a list"),
@@ -101,21 +144,62 @@ CASES = [
      "telemetry.yaml.assets[pump-02].degradation: expected a mapping, got list"),
     ("topics.yaml", "    configs:\n      cleanup.policy: delete\n      retention.ms: 604800000", "    configs: []",
      "topics.yaml.kafka.telemetry_dlq.configs: expected a mapping, got list"),
-    ("telemetry.yaml", "fault_schedule: []", "fault_schedule:\n  - {asset: pump-01, mode: imbalance}", "telemetry.yaml.fault_schedule[0]: missing key(s) ['start_s']"),
-    ("telemetry.yaml", "channels:\n  bearing_temperature_c:", "channels:\n  bearing_temperature_c: 3\n  x:", "telemetry.yaml.channels.bearing_temperature_c: expected a mapping, got int"),
+    (
+        "telemetry.yaml",
+        "fault_schedule: []",
+        "fault_schedule:\n  - {asset: pump-01, mode: imbalance}",
+        "telemetry.yaml.fault_schedule[0]: missing key(s) ['start_s']",
+    ),
+    (
+        "telemetry.yaml",
+        "channels:\n  bearing_temperature_c:",
+        "channels:\n  bearing_temperature_c: 3\n  x:",
+        "telemetry.yaml.channels.bearing_temperature_c: expected a mapping, got int",
+    ),
     ("telemetry.yaml", "sample_interval_s: 1.0", "sample_interval_s: [", None),  # invalid YAML
     # alarms.yaml
-    ("alarms.yaml", "    direction: high\n    warning: 80.0", "    direction: low\n    warning: 80.0", "alarms.yaml rule for motor-01/bearing_temperature_c.direction: only 'high' is supported"),
+    (
+        "alarms.yaml",
+        "    direction: high\n    warning: 80.0",
+        "    direction: low\n    warning: 80.0",
+        "alarms.yaml rule for motor-01/bearing_temperature_c.direction: only 'high' is supported",
+    ),
     ("alarms.yaml", "  motor-01:\n    motor_current_a: {warning: 57.75, critical: 66.0}",
-     "  motor-01:\n    speed_rpm: {warning: 1.0, critical: 2.0}", "alarms.yaml.asset_overrides.motor-01.speed_rpm: channel has no default rule in alarms.yaml.channels"),
-    ("alarms.yaml", "{warning: 57.75, critical: 66.0}", "{warning: 57.75, critical: 66.0, bogus: 1}", "alarms.yaml.asset_overrides.motor-01.motor_current_a: unknown key(s) ['bogus']"),
+     "  motor-01:\n    speed_rpm: {warning: 1.0, critical: 2.0}",
+     "alarms.yaml.asset_overrides.motor-01.speed_rpm: channel has no default rule in alarms.yaml.channels"),
+    (
+        "alarms.yaml",
+        "{warning: 57.75, critical: 66.0}",
+        "{warning: 57.75, critical: 66.0, bogus: 1}",
+        "alarms.yaml.asset_overrides.motor-01.motor_current_a: unknown key(s) ['bogus']",
+    ),
     # topics.yaml
-    ("topics.yaml", "template: plant/{asset_id}/telemetry", "template: plant/telemetry", "topics.yaml.mqtt.telemetry.template: must contain {asset_id}"),
+    (
+        "topics.yaml",
+        "template: plant/{asset_id}/telemetry",
+        "template: plant/telemetry",
+        "topics.yaml.mqtt.telemetry.template: must contain {asset_id}",
+    ),
     ("topics.yaml", "qos: 1", "qos: 3", "topics.yaml.mqtt.telemetry.qos: must be 0, 1 or 2"),
     ("topics.yaml", "partitions: 1", "partitions: 0", "topics.yaml.kafka.telemetry_dlq.partitions: expected an integer >= 1"),
-    ("topics.yaml", "value_schema: schemas/dlq_v1.avsc", "value_schema: schemas/missing.avsc", "topics.yaml.kafka.telemetry_dlq.value_schema: file not found: schemas/missing.avsc"),
-    ("topics.yaml", "      cleanup.policy: compact", "      cleanup.policy: [compact]", "topics.yaml.kafka.telemetry_alarms.configs.cleanup.policy: expected a string or number"),
-    ("topics.yaml", "    value_schema: schemas/telemetry_v1.avsc", "    value_schema: null", "topics.yaml.kafka.telemetry_raw.value_schema: required"),
+    (
+        "topics.yaml",
+        "value_schema: schemas/dlq_v1.avsc",
+        "value_schema: schemas/missing.avsc",
+        "topics.yaml.kafka.telemetry_dlq.value_schema: file not found: schemas/missing.avsc",
+    ),
+    (
+        "topics.yaml",
+        "      cleanup.policy: compact",
+        "      cleanup.policy: [compact]",
+        "topics.yaml.kafka.telemetry_alarms.configs.cleanup.policy: expected a string or number",
+    ),
+    (
+        "topics.yaml",
+        "    value_schema: schemas/telemetry_v1.avsc",
+        "    value_schema: null",
+        "topics.yaml.kafka.telemetry_raw.value_schema: required",
+    ),
 ]
 
 
@@ -135,7 +219,8 @@ def test_null_optional_keys_mean_absent(tmp_path):
 
 
 def test_fault_schedule_entries_are_validated(tmp_path):
-    target = broken(tmp_path, "telemetry.yaml", "fault_schedule: []", "fault_schedule:\n  - {asset: pump-01, mode: imbalance, start_s: 30}")
+    target = broken(tmp_path, "telemetry.yaml", "fault_schedule: []",
+                    "fault_schedule:\n  - {asset: pump-01, mode: imbalance, start_s: 30}")
     [fault] = load_config(target, env={}).telemetry.fault_schedule
     assert (fault.asset, fault.mode, fault.start_s) == ("pump-01", "imbalance", 30.0)
 

@@ -9,7 +9,8 @@ import pytest
 
 import integration_support as it
 
-spec = importlib.util.spec_from_file_location("import_rule_chains_it", it.REPO_ROOT / "scripts" / "thingsboard" / "import_rule_chains.py")
+SCRIPT = it.REPO_ROOT / "scripts" / "thingsboard" / "import_rule_chains.py"
+spec = importlib.util.spec_from_file_location("import_rule_chains_it", SCRIPT)
 irc = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = irc
 spec.loader.exec_module(irc)
@@ -37,7 +38,8 @@ def test_rule_chains_imported_and_linked(stack):
         counts[name] = (len(md["nodes"]), len(md["connections"] or []))
         refs[name] = sorted(by_id.get(n["configuration"]["ruleChainId"], "UNRESOLVED")
                             for n in md["nodes"] if n["type"].endswith("TbRuleChainInputNode"))
-    assert counts == {"TempToFirebase": (1, 0), "AlarmToFirebase": (1, 0), "CreateAndClearAlarms": (5, 4), "Root Rule Chain": (9, 8)}
+    assert counts == {"TempToFirebase": (1, 0), "AlarmToFirebase": (1, 0),
+                      "CreateAndClearAlarms": (5, 4), "Root Rule Chain": (9, 8)}
     assert refs == {"TempToFirebase": [], "AlarmToFirebase": [], "CreateAndClearAlarms": ["AlarmToFirebase", "TempToFirebase"],
                     "Root Rule Chain": ["CreateAndClearAlarms"]}
 

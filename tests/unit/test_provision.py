@@ -40,7 +40,8 @@ class FakeAdmin:
     def list_topics(self, timeout):
         if self.unreachable:
             raise KafkaException("transport failure")
-        return types.SimpleNamespace(topics={n: types.SimpleNamespace(partitions=dict.fromkeys(range(p))) for n, p in self.existing.items()})
+        topics = {n: types.SimpleNamespace(partitions=dict.fromkeys(range(p))) for n, p in self.existing.items()}
+        return types.SimpleNamespace(topics=topics)
 
     def create_topics(self, new_topics, operation_timeout):
         self.created.extend(new_topics)
@@ -88,7 +89,8 @@ def test_partition_mismatch_is_reported_not_altered(monkeypatch, json_log):
                                "telemetry.dlq": {"cleanup.policy": "delete", "retention.ms": "604800000"}})
     assert run(monkeypatch, admin) is False
     [mismatch] = events(json_log, "topic_partition_mismatch")
-    assert (mismatch["topic"], mismatch["partitions"], mismatch["configured_partitions"], mismatch["altered"]) == ("telemetry.raw", 1, 3, False)
+    got = (mismatch["topic"], mismatch["partitions"], mismatch["configured_partitions"], mismatch["altered"])
+    assert got == ("telemetry.raw", 1, 3, False)
 
 
 def test_setting_mismatch_is_reported_not_altered(monkeypatch, json_log):

@@ -240,7 +240,8 @@ def topic_meta(partitions=3, error=None):
 
 def test_start_kafka_requires_both_topics(registry, json_log, monkeypatch):
     b = Bridge(parse_args([]))
-    monkeypatch.setattr(bridge_main, "Producer", FakeMetadataProducer({"telemetry.raw": topic_meta(), "telemetry.dlq": topic_meta(1)}))
+    both = {"telemetry.raw": topic_meta(), "telemetry.dlq": topic_meta(1)}
+    monkeypatch.setattr(bridge_main, "Producer", FakeMetadataProducer(both))
     assert b.start_kafka() is True
     assert events(json_log, "kafka_ready")[0]["dlq_topic"] == "telemetry.dlq"
 

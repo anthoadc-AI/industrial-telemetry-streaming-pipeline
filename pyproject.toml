@@ -26,3 +26,13 @@ include = [
 fail_under = 80
 show_missing = true
 skip_empty = true
+
+[tool.ruff]
+# Lint: rules E (pycodestyle errors) and F (pyflakes), owner decision, Task
+# 2.6. Line length 130 matches the code as written; reformatting the whole
+# repository to the default 88 would be noise.
+line-length = 130
+extend-exclude = ["node_modules"]
+
+[tool.ruff.lint]
+select = ["E", "F"]

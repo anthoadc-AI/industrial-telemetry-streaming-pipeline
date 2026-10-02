@@ -4,7 +4,9 @@ The session fixture refuses to run if a stack (or anything on its ports) is
 already up, starts the stack with the repository's docker-compose.yml (core
 profile, or full with ThingsBoard), provisions it, and stops it at the end
 with `docker compose --profile full down`, never -v. It counts Docker volumes
-before and after and fails the session if any leaked.
+before and after and fails the session if any leaked. Before stopping, it
+saves `docker compose logs` as docker-compose.log in pytest's base temp
+directory, beside the component logs.
 
 Options:
   --stack-profile core|full   core: Mosquitto, ZooKeeper, Kafka, Schema Registry
@@ -45,7 +47,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(scope="session")
-def stack(request):
+def stack(request, tmp_path_factory):
     profile = request.config.getoption("--stack-profile")
     ports = [1883, 9092, 8081] + ([8080, 9883] if profile == "full" else [])
     busy = [p for p in ports if it.port_open(p)]
@@ -70,6 +72,10 @@ def stack(request):
 
     yield profile
 
+    # Container logs are gone after `down`; keep them next to the component
+    # logs (pytest's base temp directory, which CI uploads on failure).
+    logs = it.compose("--profile", "full", "logs", "--no-color", "--timestamps")
+    (tmp_path_factory.getbasetemp() / "docker-compose.log").write_text(logs.stdout + logs.stderr, encoding="utf-8")
     started = time.monotonic()
     down = it.compose("--profile", "full", "down")
     report["down_s"] = round(time.monotonic() - started, 1)

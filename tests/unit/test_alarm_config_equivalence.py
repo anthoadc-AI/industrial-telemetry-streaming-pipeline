@@ -46,8 +46,18 @@ BROKEN = [
     ("hysteresis wider than the band", "alarms.yaml", "hysteresis: 3.0", "hysteresis: 20.0"),
     ("unknown key in a rule", "alarms.yaml", "    persistence_samples: 3\n", "    persistence_samples: 3\n    persistance: 4\n"),
     ("persistence not a positive integer", "alarms.yaml", "persistence_samples: 3", "persistence_samples: 0"),
-    ("missing per-asset current thresholds", "alarms.yaml", "  pump-02:\n    motor_current_a: {warning: 31.5, critical: 36.0}\n", ""),
-    ("alarm on an unknown channel", "alarms.yaml", "  vibration_rms_mm_s:\n    direction: high", "  oil_pressure_bar:\n    direction: high"),
+    (
+        "missing per-asset current thresholds",
+        "alarms.yaml",
+        "  pump-02:\n    motor_current_a: {warning: 31.5, critical: 36.0}\n",
+        "",
+    ),
+    (
+        "alarm on an unknown channel",
+        "alarms.yaml",
+        "  vibration_rms_mm_s:\n    direction: high",
+        "  oil_pressure_bar:\n    direction: high",
+    ),
     ("negative hysteresis", "alarms.yaml", "hysteresis: 0.3", "hysteresis: -0.3"),
     # Found by the Task 2.4 unit tests: Python accepted an empty list here,
     # Node.js rejected it.

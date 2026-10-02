@@ -1,0 +1,96 @@
+# Continuous integration for the industrial telemetry streaming pipeline.
+#
+# Two jobs (owner decisions, Phase 2 Task 2.6):
+#   checks       lint (ruff, node --check) and the unit tests of both languages
+#                with coverage (lines >= 80 % enforced per language)
+#   integration  the integration tests on the core stack (Mosquitto, ZooKeeper,
+#                Kafka, Schema Registry); runs only when checks pass
+#
+# The full profile (ThingsBoard) does not run in CI: it would add about 1 GiB
+# of images and about 60 s of start-up to every push. Its tests
+# (test_rule_chains_imported_and_linked, test_import_is_idempotent) are run
+# locally with `make test-integration-full` and are a gate for closing a phase.
+#
+# No retries anywhere: a failure is visible and investigated. On failure the
+# integration job uploads the component logs and `docker compose logs`.
+# Actions are pinned by full commit SHA, with the release tag in a comment,
+# and the runner image by version (ubuntu-24.04, not ubuntu-latest), so an
+# operating system change is a reviewed commit, not a silent migration.
+
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Lint and unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: make install
+      - name: Lint
+        run: make lint
+      - name: Unit tests
+        run: make test
+
+  integration:
+    name: Integration tests (core stack)
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: make install
+      # Public defaults only; a value the pipeline needs is added to
+      # .env.example, never written here.
+      - name: Environment file
+        run: cp .env.example .env
+      # A separate step so the image download time is visible on its own.
+      # The core profile only: thingsboard sits in profile "full".
+      - name: Pull core images
+        run: docker compose pull
+      - name: Integration tests
+        timeout-minutes: 15
+        env:
+          PYTEST_ADDOPTS: --basetemp=${{ runner.temp }}/pytest
+        run: make test-integration
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-logs
+          path: ${{ runner.temp }}/pytest
+          if-no-files-found: warn
+          retention-days: 7

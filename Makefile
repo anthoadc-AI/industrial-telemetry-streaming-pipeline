@@ -10,6 +10,7 @@
 #                               topics, set compatibility
 #   make down                   stop the stack (keeps the ThingsBoard volume; never -v)
 #   make logs                   follow the container logs
+#   make lint                   ruff (rules E, F) on Python; node --check on every tracked .js
 #   make test                   unit tests, Python and Node.js, with coverage
 #   make test-integration       integration tests against the core stack
 #   make test-integration-full  integration tests including ThingsBoard
@@ -35,7 +36,7 @@ VENV_PY := .venv/bin/python
 endif
 JEST := node node_modules/jest/bin/jest.js
 
-.PHONY: install up up-core down logs check-secrets test test-integration test-integration-full
+.PHONY: install up up-core down logs check-secrets lint test test-integration test-integration-full
 
 install:
 	$(PYTHON) -m venv .venv
@@ -69,6 +70,10 @@ logs:
 
 check-secrets:
 	$(PYTHON) scripts/check_secrets.py
+
+lint:
+	$(VENV_PY) -m ruff check .
+	node scripts/check_js_syntax.js
 
 test:
 	$(VENV_PY) -m pytest --cov

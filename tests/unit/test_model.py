@@ -42,15 +42,17 @@ def test_steady_state_start_and_channel_models(cfg):
 def test_load_follows_the_duty_cycle_and_is_clamped(cfg):
     m = build(cfg, "motor-01")
     assert m.load(225.0) == pytest.approx(0.75 + 0.10)  # quarter of a 900 s period
-    high = build(cfg, "motor-01", load=dataclasses.replace(cfg.telemetry.asset("motor-01").load, base=1.2, amplitude=0.5, noise_std=0.0))
+    base_load = cfg.telemetry.asset("motor-01").load
+    high = build(cfg, "motor-01", load=dataclasses.replace(base_load, base=1.2, amplitude=0.5, noise_std=0.0))
     assert high.load(225.0) == 1.2
-    low = build(cfg, "motor-01", load=dataclasses.replace(cfg.telemetry.asset("motor-01").load, base=0.0, amplitude=0.5, noise_std=0.0))
+    low = build(cfg, "motor-01", load=dataclasses.replace(base_load, base=0.0, amplitude=0.5, noise_std=0.0))
     assert low.load(675.0) == 0.0
 
 
 def test_temperature_is_a_first_order_lag(cfg):
-    m = build(cfg, "motor-01", load=dataclasses.replace(cfg.telemetry.asset("motor-01").load, base=1.0, amplitude=0.0, noise_std=0.0))
-    start, target, tau = m.temperature_c, 25.0 + 40.0, 600.0
+    full_load = dataclasses.replace(cfg.telemetry.asset("motor-01").load, base=1.0, amplitude=0.0, noise_std=0.0)
+    m = build(cfg, "motor-01", load=full_load)
+    start, target = m.temperature_c, 25.0 + 40.0
     m.step(0.0, 600.0)  # one time constant
     assert m.temperature_c == pytest.approx(target - (target - start) * math.exp(-1))
 

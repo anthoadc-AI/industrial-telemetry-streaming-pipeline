@@ -42,7 +42,10 @@ def test_restore_after_real_compaction(stack, offsets_mark, fresh_group, log_dir
     assert it.simulator(log_dir, "sim-2-normal", 50, seed=32).finish() == 0
     # Episode 1 must be fully written (every RAISED cleared) before episode 2.
     deadline = time.monotonic() + 60
-    while time.monotonic() < deadline and not (a.find("alarm_raised") and len(a.find("alarm_cleared")) == len(a.find("alarm_raised"))):
+    def episode1_written():
+        raised = a.find("alarm_raised")
+        return raised and len(a.find("alarm_cleared")) == len(raised)
+    while time.monotonic() < deadline and not episode1_written():
         time.sleep(0.3)
     time.sleep(2.5)  # past segment.ms, so episode 2 starts a new segment
     assert it.simulator(log_dir, "sim-3-faults", 100, *FAULTS, seed=33).finish() == 0
