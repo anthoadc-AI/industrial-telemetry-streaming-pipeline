@@ -18,15 +18,23 @@ include = [
     "bridge/mqtt_to_kafka/*.py",
     "broker/*.py",
     "broker/kafka/*.py",
+    "scripts/check_branch_coverage.py",
     "scripts/check_secrets.py",
     "scripts/clean.py",
     "scripts/thingsboard/*.py",
 ]
 
 [tool.coverage.report]
+# fail_under is coverage.py's single total, statements and branches together.
 fail_under = 80
 show_missing = true
 skip_empty = true
+
+# Branches alone, >= 80 per cent, enforced (owner decision, Task 2.8).
+# coverage.py has no branch-only threshold; scripts/check_branch_coverage.py
+# reads this after pytest --cov in make test and make coverage.
+[tool.check_branch_coverage]
+fail_under = 80
 
 [tool.ruff]
 # Lint: rules E (pycodestyle errors) and F (pyflakes), owner decision, Task

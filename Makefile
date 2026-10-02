@@ -37,7 +37,7 @@ stack
 
 quality
   make lint                   ruff (rules E, F) on Python; node --check on every tracked .js
-  make test                   unit tests, Python and Node.js, with coverage (lines >= 80 per cent each)
+  make test                   unit tests, Python and Node.js, with coverage (lines and branches >= 80 per cent each)
   make coverage               as make test, also writing coverage.xml and coverage/lcov.info
   make test-integration       integration tests on the core stack (starts and stops it; run with no stack up)
   make test-integration-full  integration tests including ThingsBoard (same rule)
@@ -99,14 +99,16 @@ lint:
 	$(VENV_PY) -m ruff check .
 	node scripts/check_js_syntax.js
 
-# Thresholds live in pyproject.toml (fail_under) and jest.config.js
-# (coverageThreshold); package.json is the only entry point for Jest.
+# Thresholds live in pyproject.toml (fail_under, and check_branch_coverage for
+# branches alone) and jest.config.js (coverageThreshold); package.json is the only entry point for Jest.
 test:
 	$(VENV_PY) -m pytest --cov
+	$(VENV_PY) scripts/check_branch_coverage.py
 	npm test
 
 coverage:
 	$(VENV_PY) -m pytest --cov --cov-report=term-missing --cov-report=xml
+	$(VENV_PY) scripts/check_branch_coverage.py
 	npm run test:coverage
 
 test-integration:
