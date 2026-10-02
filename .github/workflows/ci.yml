@@ -2,9 +2,13 @@
 #
 # Two jobs (owner decisions, Phase 2 Task 2.6):
 #   checks       lint (ruff, node --check) and the unit tests of both languages
-#                with coverage (lines >= 80 % enforced per language)
+#                with coverage (lines and branches >= 80 % enforced per language)
 #   integration  the integration tests on the core stack (Mosquitto, ZooKeeper,
 #                Kafka, Schema Registry); runs only when checks pass
+#
+# Triggers: a push to any branch (owner decision, Phase 3 DETENTE 3.1.a; until
+# then only main and feature/**, so docs/** branches ran no CI) and pull
+# requests to main.
 #
 # The full profile (ThingsBoard) does not run in CI: it would add about 1 GiB
 # of images and about 60 s of start-up to every push. Its tests
@@ -21,7 +25,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches: ["**"]
   pull_request:
     branches: [main]
 
