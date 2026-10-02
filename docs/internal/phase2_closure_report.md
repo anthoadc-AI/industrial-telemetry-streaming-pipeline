@@ -8,7 +8,7 @@
 | Work dates | 2026-10-01 and 2026-10-02 |
 | Machine | Windows 11 Home, Docker Engine 29.0.1, Compose v2.40.3, Python 3.13.4, Node.js 24.16.0, GNU Make 3.81 (GnuWin32) |
 | CI | GitHub Actions, `ubuntu-24.04`, GNU Make 4.3 |
-| Status | **Awaiting owner review.** No tag created. |
+| Status | **Closed, owner approval 2026-10-02.** Tag `v2-engineering-quality`. |
 
 All data produced in this phase is synthetic.
 
@@ -364,8 +364,8 @@ Node.js consumer superseding Phase 0 decision 14; `common/` as a top-level direc
 
 ## 9. State at closure
 
-- `main` at `1b8875a`, CI green on both jobs (run 37044447526); no feature branch left locally or on GitHub. This report is on `docs/phase2-closure-report`, not merged.
-- No tag for Phase 2 yet, by owner instruction.
+- `main` at `1b8875a`, CI green on both jobs (run 37044447526); no feature branch left locally or on GitHub. This report was merged into `main` after owner approval.
+- Phase 2 tagged `v2-engineering-quality` (annotated) on the merge of this report into `main`.
 - Stack stopped with `make down` (no `-v`) after the last integration run. The named ThingsBoard volumes `industrial-telemetry_tb-data` and `industrial-telemetry_tb-logs` are kept; Kafka and ZooKeeper data was in tmpfs and is gone by design. Docker volume count 89, unchanged through the whole phase.
 - Temporary clones used for the fresh-clone checks were created under the user's temporary directory and deleted afterwards.
 - The repository is on GitHub, private, since 2026-10-02 02:04Z (Task 2.6). The branches of Tasks 2.1 to 2.5 were merged locally before it existed and were never run by CI; from Task 2.6 on, every branch was pushed, run green in CI before merging, and deleted locally and on GitHub after merge.
