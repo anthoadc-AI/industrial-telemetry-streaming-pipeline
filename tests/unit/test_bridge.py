@@ -1,9 +1,12 @@
 """bridge/mqtt_to_kafka/__main__.py: the Bridge class with Kafka, Schema Registry and MQTT faked.
 
 Avro serialisation is real (confluent-kafka serializers on its in-process mock
-registry); the producer is FakeProducer from conftest. Covers the three Task
-2.3 paths that need a fault to be provoked: serialization_error, a failed
-dead-letter delivery, and a failed dead-letter serialisation.
+registry); the producer is FakeProducer from conftest, whose poll() the tests
+call by hand, or ThreadedProducer below when the bridge's own delivery-report
+thread serves the reports. Covers the three Task 2.3 paths that need a fault
+to be provoked (serialization_error, a failed dead-letter delivery, a failed
+dead-letter serialisation) and the Task 3.1-A ones: reports served without the
+main loop, and the bridge stopping when the delivery-report thread dies.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import base64
 import json
 import signal
 import threading
+import time
 import types
 import warnings
 
@@ -54,11 +58,20 @@ def decode(registry, topic, value):
     return AvroDeserializer(registry)(value, SerializationContext(topic, MessageField.VALUE))
 
 
+RECEIVED_NS = 1_790_889_302_300_000_000
+
+
+def received(payload=None, topic=TOPIC):
+    """An inbox item as _on_message builds it."""
+    raw = payload if isinstance(payload, bytes) else json.dumps(payload or telemetry()).encode()
+    return (topic, raw, RECEIVED_NS, time.perf_counter())
+
+
 def handle(b, payload, topic=TOPIC):
-    raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
-    b.handle(topic, raw, 1790889302.300)
+    item = received(payload, topic)
+    b.handle(*item)
     b.producer.poll()
-    return raw
+    return item[1]
 
 
 def events(lines, name):
@@ -75,7 +88,13 @@ def test_valid_message_goes_to_telemetry_raw_keyed_by_asset(bridge, registry, js
     assert decode(registry, "telemetry.raw", record["value"])["seq"] == 3
     assert bridge.producer.on("telemetry.dlq") == []
     [delivered] = events(json_log, "message_delivered")
-    assert {"ts_to_receive_ms", "ts_to_produce_ms", "ts_to_ack_ms"} <= delivered.keys()
+    stages = ("event_to_receive_ms", "receive_to_produce_ms", "produce_to_ack_ms")
+    assert set(stages) | {"event_to_ack_ms", "receive_ts_ms"} <= delivered.keys()
+    assert not {"ts_to_receive_ms", "ts_to_produce_ms", "ts_to_ack_ms"} & delivered.keys()
+    assert delivered["event_to_ack_ms"] == pytest.approx(sum(delivered[f] for f in stages), abs=0.002)
+    # telemetry() has ts 2026-10-01T23:50:15.087Z; RECEIVED_NS is 1790889302.300 s
+    assert delivered["event_to_receive_ms"] == pytest.approx((1790889302.300 - 1790898615.087) * 1000, abs=0.01)
+    assert delivered["receive_ts_ms"] == RECEIVED_NS / 1e6 == 1790889302300.0
     assert (bridge.stats.received, bridge.stats.produced, bridge.stats.delivered) == (1, 1, 1)
 
 
@@ -183,7 +202,7 @@ def test_dead_letter_buffer_full_is_retried(bridge):
 def test_run_stops_at_count(bridge):
     bridge.args.count = 2
     for _ in range(3):
-        bridge.inbox.put((TOPIC, json.dumps(telemetry()).encode(), 0.0))
+        bridge.inbox.put(received())
     assert bridge.run(threading.Event()) == "count"
     assert bridge.stats.received == 2
 
@@ -199,10 +218,10 @@ def test_run_stops_on_signal_and_on_duration(bridge):
 def test_shutdown_drains_or_counts_queued_messages(bridge, json_log):
     fake_mqtt = types.SimpleNamespace(disconnect=lambda: None, loop_stop=lambda: None)
     bridge.mqtt = fake_mqtt
-    bridge.inbox.put((TOPIC, json.dumps(telemetry()).encode(), 0.0))
+    bridge.inbox.put(received())
     assert bridge.shutdown("signal") is True  # drained and delivered
     assert bridge.stats.delivered == 1
-    bridge.inbox.put((TOPIC, json.dumps(telemetry()).encode(), 0.0))
+    bridge.inbox.put(received())
     bridge.shutdown("count")
     assert events(json_log, "run_finished")[-1]["messages_unprocessed"] == 1
 
@@ -216,6 +235,155 @@ def test_shutdown_incomplete_when_flush_leaves_messages(bridge, json_log):
 def test_shutdown_after_startup_failure_logs_its_own_event(bridge, json_log):
     bridge.shutdown("startup_failed")
     assert events(json_log, "shutdown_after_startup_failure")
+
+
+# --- delivery-report thread (Task 3.1-A) ---------------------------------------
+
+
+class ThreadedProducer:
+    """Producer stand-in for the delivery-report thread.
+
+    Each record is "acknowledged by the broker" ack_delay seconds after
+    produce(); poll(timeout) blocks until an acknowledged report is due or the
+    timeout ends, then runs the due callbacks, as librdkafka's poll() does.
+    poll_error makes poll() raise, as an exception escaping a callback would.
+    """
+
+    def __init__(self, ack_delay=0.02, poll_error=None):
+        self.ack_delay, self.poll_error = ack_delay, poll_error
+        self.cond = threading.Condition()
+        self.pending = []  # (due perf_counter, callback, message)
+        self.records = []
+
+    def produce(self, topic, key=None, value=None, on_delivery=None):
+        with self.cond:
+            self.records.append({"topic": topic, "key": key, "value": value})
+            msg = types.SimpleNamespace(topic=lambda: topic, partition=lambda: 0, offset=lambda: len(self.records) - 1)
+            self.pending.append((time.perf_counter() + self.ack_delay, on_delivery, msg))
+            self.cond.notify_all()
+
+    def poll(self, timeout=0):
+        if self.poll_error:
+            raise self.poll_error
+        deadline = time.perf_counter() + timeout
+        with self.cond:
+            while True:
+                now = time.perf_counter()
+                due = [p for p in self.pending if p[0] <= now]
+                if due or now >= deadline:
+                    break
+                waits = [p[0] - now for p in self.pending] + [deadline - now]
+                self.cond.wait(min(waits))
+            self.pending = [p for p in self.pending if p[0] > now]
+        for _, callback, msg in due:
+            callback(None, msg)
+        return len(due)
+
+    def flush(self, timeout=0):
+        end = time.perf_counter() + timeout
+        while self.pending and time.perf_counter() < end:
+            self.poll(0.05)
+        return len(self.pending)
+
+    def __len__(self):
+        return len(self.pending)
+
+    def on(self, topic):
+        return [r for r in self.records if r["topic"] == topic]
+
+
+def wait_for(predicate, timeout=2.0):
+    end = time.perf_counter() + timeout
+    while time.perf_counter() < end:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return False
+
+
+def test_ack_is_timed_when_the_broker_acknowledges_not_when_the_main_loop_polls(bridge, json_log):
+    """Fails on the Phase 2 design, which served reports only from the main loop.
+
+    The main loop runs as in production: it waits on the inbox in 100 ms steps.
+    The fake broker acknowledges 20 ms after produce(). produce_to_ack_ms must
+    reflect those 20 ms, not the next main-loop poll about 100 ms later.
+    """
+    bridge.producer = ThreadedProducer(ack_delay=0.02)
+    bridge.start_delivery_reports()
+    bridge.args.duration = 1.0
+    bridge.inbox.put(received())
+    loop = threading.Thread(target=bridge.run, args=(threading.Event(),))
+    loop.start()
+    try:
+        assert wait_for(lambda: events(json_log, "message_delivered"), timeout=0.5), "report not served within 0.5 s"
+        [delivered] = events(json_log, "message_delivered")
+        assert 18 <= delivered["produce_to_ack_ms"] < 60
+    finally:
+        loop.join()
+        bridge.stop_delivery_reports()
+
+
+def test_all_reports_are_counted_across_threads(bridge):
+    bridge.producer = ThreadedProducer(ack_delay=0.0)
+    bridge.start_delivery_reports()
+    try:
+        for i in range(300):
+            bridge.handle(*received(telemetry(seq=i)))
+            bridge.dead_letter(TOPIC, b"x", "invalid_json", "")
+        assert wait_for(lambda: bridge.stats.delivered == 300 and bridge.stats.dlq_delivered == 300)
+    finally:
+        bridge.stop_delivery_reports()
+    assert (bridge.stats.received, bridge.stats.produced, bridge.stats.invalid["invalid_json"]) == (300, 300, 300)
+
+
+def test_bridge_stops_when_the_delivery_report_thread_dies(bridge, json_log):
+    bridge.producer = ThreadedProducer(poll_error=RuntimeError("poll broke"))
+    bridge.start_delivery_reports()
+    assert wait_for(bridge.reports_failed.is_set)
+    [failure] = events(json_log, "delivery_reports_failed")
+    assert failure["level"] == "ERROR" and failure["error"] == "RuntimeError: poll broke"
+
+    for _ in range(3):
+        bridge.inbox.put(received())
+    assert bridge.run(threading.Event()) == "delivery_reports_failed"
+    assert bridge.producer.records == []  # nothing produced once reports are not served
+    bridge.mqtt = types.SimpleNamespace(disconnect=lambda: None, loop_stop=lambda: None)
+    assert bridge.shutdown("delivery_reports_failed") is False
+    [summary] = events(json_log, "run_finished_incomplete")
+    assert summary["reason"] == "delivery_reports_failed" and summary["messages_unprocessed"] == 3
+
+
+def test_an_exception_in_a_delivery_callback_stops_the_bridge(bridge, json_log, monkeypatch):
+    bridge.producer = ThreadedProducer(ack_delay=0.0)
+
+    def broken_info(event, *a, **k):
+        if event == "message_delivered":
+            raise OSError("log handler failed")
+    monkeypatch.setattr(bridge_main.log, "info", broken_info)
+    bridge.start_delivery_reports()
+    bridge.handle(*received())
+    assert wait_for(bridge.reports_failed.is_set)
+    assert events(json_log, "delivery_reports_failed")[0]["error"] == "OSError: log handler failed"
+    assert bridge.run(threading.Event()) == "delivery_reports_failed"
+
+
+def test_nothing_is_produced_after_the_delivery_report_thread_failed(bridge, json_log):
+    bridge.reports_failed.set()
+    bridge.handle(*received())
+    bridge.dead_letter(TOPIC, b"x", "invalid_json", "")
+    assert bridge.producer.records == []
+    assert (bridge.stats.produced, bridge.stats.dlq_failed) == (0, 1)
+    assert "delivery-report thread has failed" in events(json_log, "dlq_delivery_failed")[0]["error"]
+
+
+def test_flush_failure_is_reported_in_the_summary(bridge, json_log):
+    def failing_flush(timeout=0):
+        raise RuntimeError("callback failed again")
+    bridge.producer.flush = failing_flush
+    bridge.producer.pending.append((None, None))
+    assert bridge.shutdown("signal") is False
+    assert events(json_log, "flush_failed")[0]["error"] == "RuntimeError: callback failed again"
+    assert events(json_log, "run_finished_incomplete")[0]["messages_undelivered_at_exit"] == 1
 
 
 # --- start-up ------------------------------------------------------------------
@@ -320,7 +488,9 @@ def test_mqtt_callbacks(bridge, json_log):
     bridge._on_disconnect(None, None, None, OK, None)
     assert len(events(json_log, "mqtt_disconnected")) == 1
     bridge._on_message(None, None, types.SimpleNamespace(topic=TOPIC, payload=b"x"))
-    assert bridge.inbox.get_nowait()[:2] == (TOPIC, b"x")
+    topic, payload, received_ns, received_perf = bridge.inbox.get_nowait()
+    assert (topic, payload) == (TOPIC, b"x")
+    assert abs(received_ns / 1e9 - time.time()) < 5 and received_perf <= time.perf_counter()
 
 
 # --- small pieces --------------------------------------------------------------
