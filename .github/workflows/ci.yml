@@ -13,7 +13,9 @@
 #
 # No retries anywhere: a failure is visible and investigated. On failure the
 # integration job uploads the component logs and `docker compose logs`.
-# Actions are pinned by full commit SHA, with the release tag in a comment.
+# Actions are pinned by full commit SHA, with the release tag in a comment,
+# and the runner image by version (ubuntu-24.04, not ubuntu-latest), so an
+# operating system change is a reviewed commit, not a silent migration.
 
 name: CI
 
@@ -29,7 +31,7 @@ permissions:
 jobs:
   checks:
     name: Lint and unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,7 +56,7 @@ jobs:
   integration:
     name: Integration tests (core stack)
     needs: checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
