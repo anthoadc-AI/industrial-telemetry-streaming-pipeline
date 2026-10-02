@@ -50,11 +50,22 @@ def test_load_follows_the_duty_cycle_and_is_clamped(cfg):
 
 
 def test_temperature_is_a_first_order_lag(cfg):
-    full_load = dataclasses.replace(cfg.telemetry.asset("motor-01").load, base=1.0, amplitude=0.0, noise_std=0.0)
+    """After one time constant at full load, the gap to the target has shrunk to exp(-1).
+
+    The time constant, the rise and the ambient come from config/telemetry.yaml,
+    so the test follows the configuration instead of repeating its numbers.
+    The model starts at the steady state of its own load, which here is the
+    target itself; it is set to ambient (a cold start) so there is a gap to close.
+    """
+    asset = cfg.telemetry.asset("motor-01")
+    full_load = dataclasses.replace(asset.load, base=1.0, amplitude=0.0, noise_std=0.0)
     m = build(cfg, "motor-01", load=full_load)
-    start, target = m.temperature_c, 25.0 + 40.0
-    m.step(0.0, 600.0)  # one time constant
-    assert m.temperature_c == pytest.approx(target - (target - start) * math.exp(-1))
+    ambient = cfg.telemetry.ambient_temperature_c
+    m.temperature_c = ambient
+    target = ambient + asset.thermal.rise_at_full_load_c
+    assert target - ambient > 1.0
+    m.step(0.0, asset.thermal.time_constant_s)
+    assert m.temperature_c == pytest.approx(target - (target - ambient) * math.exp(-1))
 
 
 def test_step_fault_offsets_from_its_start(cfg):
