@@ -61,13 +61,35 @@ def unique(prefix: str) -> str:
 
 
 class Proc:
-    """A pipeline component running in the background, stderr captured as JSON lines."""
+    """A pipeline component running in the background, stderr captured as JSON lines.
+
+    Every Proc is registered in Proc.started. The autouse fixture in
+    proc_isolation.py stops, after each test, whatever that test left running,
+    whether it passed or failed: a failed assertion skips the test's own
+    finish() calls, and a component left alive (a bridge still subscribed, a
+    consumer still in its group) would otherwise act on the next test's data.
+    """
+
+    started: list["Proc"] = []
 
     def __init__(self, name: str, cmd: list[str], log_dir: Path):
         self.name = name
         self.log = log_dir / f"{name}.jsonl"
         self._file = self.log.open("w", encoding="utf-8")
         self.p = subprocess.Popen(cmd, cwd=REPO_ROOT, env=ENV, stdout=subprocess.DEVNULL, stderr=self._file)
+        Proc.started.append(self)
+
+    def stop(self) -> bool:
+        """Kill the process if it is still running and close its log; True if it had to be killed."""
+        running = self.p.poll() is None
+        if running:
+            self.p.kill()
+            self.p.wait()
+        if not self._file.closed:
+            self._file.close()
+        return running
+
+
 
     def events(self) -> list[dict]:
         if not self._file.closed:
@@ -115,6 +137,13 @@ class Proc:
 
     def tail(self, n: int = 5) -> str:
         return " | ".join(self.log.read_text(encoding="utf-8").splitlines()[-n:])
+
+
+def stop_leftover_processes() -> list[str]:
+    """Stop every registered Proc still running; return the names of those stopped."""
+    stopped = [proc.name for proc in Proc.started if proc.stop()]
+    Proc.started.clear()
+    return stopped
 
 
 def simulator(log_dir: Path, name: str, count: int, *faults: str, seed: int = 1, rate: float = 10) -> Proc:
@@ -229,6 +258,32 @@ def position_group_at_end(group: str, topic: str) -> dict[int, int]:
     finally:
         c.close()
     return end
+
+
+ROLL_MARKER_KEY = "it-roll-marker/{partition}"
+
+
+def roll_every_partition(topic: str, segment_ms: int) -> int:
+    """Make the broker roll the active segment of every partition of a compacted topic.
+
+    The broker evaluates segment.ms only when it appends to a partition: a
+    partition that receives no further write keeps its active segment open
+    indefinitely, and the log cleaner never compacts an active segment. This
+    waits past segment_ms, then appends one tombstone with a reserved key to
+    each partition, so every record written before is in a closed, cleanable
+    segment. Returns the number of markers written (one per partition).
+    """
+    time.sleep(segment_ms / 1000 + 1.0)
+    partitions = sorted(watermarks(topic))
+    p = Producer({"bootstrap.servers": BOOTSTRAP})
+    for partition in partitions:
+        p.produce(topic, key=ROLL_MARKER_KEY.format(partition=partition).encode(), value=None, partition=partition)
+    assert p.flush(10) == 0
+    return len(partitions)
+
+
+def is_roll_marker(record: dict) -> bool:
+    return record["key"] is not None and record["key"].decode().startswith("it-roll-marker/")
 
 
 def produce_raw(topic: str, value: bytes | None, key: bytes | None = b"pump-01") -> None:

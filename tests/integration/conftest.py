@@ -22,6 +22,7 @@ import time
 import pytest
 
 import integration_support as it
+from proc_isolation import stop_leftover_processes  # noqa: F401  (autouse fixture)
 
 TOPICS = ("telemetry.raw", "telemetry.alarms", "telemetry.dlq")
 
