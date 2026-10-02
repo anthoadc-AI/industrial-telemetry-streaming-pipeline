@@ -1,24 +1,11 @@
-# Developer entry points.
-#
-#   make install                create .venv, install requirements.txt and
-#                               requirements-dev.txt, and the npm dependencies
-#                               from package-lock.json (npm ci)
-#   make up                     start the full stack (profile "full": core plus
-#                               ThingsBoard), create Kafka topics, set Schema
-#                               Registry compatibility, import the rule chains
-#   make up-core                start the core stack only (no ThingsBoard), create
-#                               topics, set compatibility
-#   make down                   stop the stack (keeps the ThingsBoard volume; never -v)
-#   make logs                   follow the container logs
-#   make lint                   ruff (rules E, F) on Python; node --check on every tracked .js
-#   make test                   unit tests, Python and Node.js, with coverage
-#   make test-integration       integration tests against the core stack
-#   make test-integration-full  integration tests including ThingsBoard
-#   make check-secrets          scan staged files; runs before every commit
+# Developer entry points. `make` alone prints the help below, which is the
+# documentation of every target; keep it in step with the recipes.
 #
 # Settings come from .env (copy .env.example), exported to every recipe.
-# The integration tests start and stop the stack themselves; run them with no
-# stack up.
+#
+# Every target runs from Git Bash and PowerShell on Windows and from bash on
+# Linux. Recipes that would need shell features (deleting trees, background
+# processes) are Python scripts called on a single line instead.
 
 -include .env
 export
@@ -34,14 +21,51 @@ VENV_PY := ./.venv/Scripts/python.exe
 else
 VENV_PY := .venv/bin/python
 endif
-JEST := node node_modules/jest/bin/jest.js
 
-.PHONY: install up up-core down logs check-secrets lint test test-integration test-integration-full
+# Printed with $(info), so the text never passes through a shell and reads
+# the same everywhere.
+define HELP
+Usage: make <target>    (make alone prints this help)
+
+stack
+  make up                     start the full stack (core plus ThingsBoard), create the Kafka topics, set
+                              Schema Registry compatibility, import the ThingsBoard rule chains
+  make up-core                start the core stack only (Mosquitto, ZooKeeper, Kafka, Schema Registry), provision
+  make down                   stop and remove every container, always with --profile full (ThingsBoard
+                              included); named volumes are kept, never -v
+  make logs                   follow the container logs (all profiles)
+
+quality
+  make lint                   ruff (rules E, F) on Python; node --check on every tracked .js
+  make test                   unit tests, Python and Node.js, with coverage (lines >= 80 per cent each)
+  make coverage               as make test, also writing coverage.xml and coverage/lcov.info
+  make test-integration       integration tests on the core stack (starts and stops it; run with no stack up)
+  make test-integration-full  integration tests including ThingsBoard (same rule)
+  make smoke                  the Phase 1 smoke run, 200 messages end to end (stack up, telemetry.raw empty)
+  make check-secrets          scan the staged files for secrets; the pre-commit hook runs it
+
+tools
+  make install                create .venv, install the Python and npm dependencies, enable the
+                              versioned git hooks (core.hooksPath scripts/hooks)
+  make clean                  remove test, coverage and smoke output and __pycache__; never Docker volumes or .env
+  make help                   this text
+endef
+
+.DEFAULT_GOAL := help
+
+.PHONY: help install up up-core down logs check-secrets lint test coverage test-integration test-integration-full smoke clean
+
+# The recipe line is only there so Make does not report "Nothing to be done";
+# `exit 0` is a builtin of both sh and cmd.exe.
+help:
+	$(info $(HELP))
+	@exit 0
 
 install:
 	$(PYTHON) -m venv .venv
 	$(VENV_PY) -m pip install -r requirements.txt -r requirements-dev.txt
 	npm ci --no-fund --no-audit
+	git config core.hooksPath scripts/hooks
 
 # --force-recreate: containers are always created fresh. Phase 0 reproduced a
 # ThingsBoard container that, restarted after an unclean stop, came up without
@@ -69,18 +93,30 @@ logs:
 	$(COMPOSE) --profile full logs -f --tail=200
 
 check-secrets:
-	$(PYTHON) scripts/check_secrets.py
+	$(VENV_PY) scripts/check_secrets.py
 
 lint:
 	$(VENV_PY) -m ruff check .
 	node scripts/check_js_syntax.js
 
+# Thresholds live in pyproject.toml (fail_under) and jest.config.js
+# (coverageThreshold); package.json is the only entry point for Jest.
 test:
 	$(VENV_PY) -m pytest --cov
-	$(JEST) --coverage
+	npm test
+
+coverage:
+	$(VENV_PY) -m pytest --cov --cov-report=term-missing --cov-report=xml
+	npm run test:coverage
 
 test-integration:
 	$(VENV_PY) -m pytest tests/integration --stack-profile=core
 
 test-integration-full:
 	$(VENV_PY) -m pytest tests/integration --stack-profile=full
+
+smoke:
+	$(VENV_PY) scripts/smoke/run_smoke.py
+
+clean:
+	$(VENV_PY) scripts/clean.py --pycache .coverage coverage.xml coverage.json coverage .pytest_cache .ruff_cache smoke-logs

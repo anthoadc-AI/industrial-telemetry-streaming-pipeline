@@ -13,3 +13,4 @@ Makefile       text eol=lf
 .nvmrc         text eol=lf
 *.toml         text eol=lf
 .python-version text eol=lf
+scripts/hooks/* text eol=lf
