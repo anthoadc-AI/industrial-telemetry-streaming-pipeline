@@ -55,7 +55,9 @@ STEP 0 must:
 
 Acceptance: before/after distributions from the same run conditions, a unit test that fails if ack time is taken at poll time, schema or log-format changes documented, `make smoke` still 200/200.
 
-**3.1-B Rule chain import with `FIREBASE_ENABLED=false`.** The import leaves three REST nodes with an unresolved placeholder inside the Root Rule Chain. Once telemetry reaches ThingsBoard, each message would execute a failing REST call.
+**3.1-B Rule chain import with `FIREBASE_ENABLED=false`.** The import leaves three REST nodes with an unresolved placeholder. One is inside the Root Rule Chain (the node named "Firebase", on the "Post telemetry" output of the message type switch); the other two are the single nodes of the `TempToFirebase` and `AlarmToFirebase` chains, reached from `CreateAndClearAlarms` through rule-chain input nodes. Once telemetry reaches ThingsBoard, each message would execute a failing REST call.
+
+> **Errata, 2026-10-02** (DETENTE 3.0.a): the first version of this paragraph placed all three REST nodes inside the Root Rule Chain. The ThingsBoard REST API and the exported JSON show one there and one in each of `TempToFirebase` and `AlarmToFirebase`. Corrected above; the rest of 3.1-B is unchanged.
 
 STEP 0 must:
 - Show the three nodes and their connections in the exported JSON.
