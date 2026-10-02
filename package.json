@@ -10,8 +10,8 @@
   },
   "scripts": {
     "alarm-consumer": "node processing/alarm_consumer/index.js",
-    "test": "jest",
-    "test:coverage": "jest --coverage"
+    "test": "jest --coverage",
+    "test:coverage": "jest --coverage --coverageReporters=text --coverageReporters=text-summary --coverageReporters=lcovonly"
   },
   "dependencies": {
     "@kafkajs/confluent-schema-registry": "4.1.0",

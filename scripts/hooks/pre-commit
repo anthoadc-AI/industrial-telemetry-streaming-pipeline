@@ -1,0 +1,22 @@
+#!/bin/sh
+# Secret scan before every commit: scripts/check_secrets.py on the staged
+# files, with the repository's virtual environment. A hit blocks the commit.
+#
+# Versioned here, not in .git/hooks (which is not cloned); `make install`
+# activates it with `git config core.hooksPath scripts/hooks`. Git runs hooks
+# with sh on every platform, Git for Windows included.
+#
+# Fails closed: with no .venv the commit is refused, not let through unscanned.
+
+root=$(git rev-parse --show-toplevel) || exit 1
+
+if [ -x "$root/.venv/Scripts/python.exe" ]; then
+    py="$root/.venv/Scripts/python.exe"
+elif [ -x "$root/.venv/bin/python" ]; then
+    py="$root/.venv/bin/python"
+else
+    echo "pre-commit: no virtual environment in .venv; run make install first" >&2
+    exit 1
+fi
+
+exec "$py" "$root/scripts/check_secrets.py"

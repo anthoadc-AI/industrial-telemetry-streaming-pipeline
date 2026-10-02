@@ -19,6 +19,7 @@ include = [
     "broker/*.py",
     "broker/kafka/*.py",
     "scripts/check_secrets.py",
+    "scripts/clean.py",
     "scripts/thingsboard/*.py",
 ]
 
