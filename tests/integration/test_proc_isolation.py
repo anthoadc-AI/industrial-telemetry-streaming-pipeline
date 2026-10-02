@@ -61,9 +61,12 @@ def run_inner(tmp_path: Path, with_fixture: bool) -> int:
         conftest += "from proc_isolation import stop_leftover_processes  # noqa: F401\n"
     (tmp_path / "conftest.py").write_text(conftest)
     (tmp_path / "test_inner.py").write_text(INNER_TEST)
+    # The inner run must not inherit this run's options: CI sets PYTEST_ADDOPTS=--basetemp=<dir>, a parent of
+    # tmp_path, which pytest refuses as the inner run's basetemp (exit 4, CI run 37074403702).
+    env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
     result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-o", "addopts=",
                              "--rootdir", str(tmp_path), str(tmp_path / "test_inner.py")],
-                            cwd=tmp_path, capture_output=True, text=True, timeout=120)
+                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 1 and "1 failed" in result.stdout, result.stdout[-1500:]
     return int((tmp_path / "pid.txt").read_text())
 
