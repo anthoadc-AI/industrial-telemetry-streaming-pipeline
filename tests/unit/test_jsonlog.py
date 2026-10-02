@@ -53,7 +53,7 @@ def test_threshold_filters_records():
     finally:
         root.handlers[:], level = saved
         root.setLevel(level)
-    assert [json.loads(l)["event"] for l in buffer.getvalue().splitlines()] == ["shown"]
+    assert [json.loads(line)["event"] for line in buffer.getvalue().splitlines()] == ["shown"]
 
 
 def test_library_warnings_become_json_lines(json_log):

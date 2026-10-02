@@ -16,7 +16,8 @@ import pytest
 
 from conftest import REPO_ROOT
 
-spec = importlib.util.spec_from_file_location("import_rule_chains", REPO_ROOT / "scripts" / "thingsboard" / "import_rule_chains.py")
+spec = importlib.util.spec_from_file_location("import_rule_chains",
+                                              REPO_ROOT / "scripts" / "thingsboard" / "import_rule_chains.py")
 irc = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = irc
 spec.loader.exec_module(irc)
@@ -211,7 +212,8 @@ def test_import_creates_missing_chains_updates_existing_and_sets_root(json_log):
 
 def test_duplicate_chain_names_stop_the_import():
     tb = FakeThingsBoard()
-    tb.request = lambda *a, **k: {"data": [{"name": "TempToFirebase", "id": {"id": "a"}}, {"name": "TempToFirebase", "id": {"id": "b"}}]}
+    twins = [{"name": "TempToFirebase", "id": {"id": "a"}}, {"name": "TempToFirebase", "id": {"id": "b"}}]
+    tb.request = lambda *a, **k: {"data": twins}
     with pytest.raises(irc.ImportFailed, match="2 rule chains named 'TempToFirebase'"):
         tb.find_rule_chain("TempToFirebase")
 
