@@ -14,3 +14,6 @@ Makefile       text eol=lf
 *.toml         text eol=lf
 .python-version text eol=lf
 scripts/hooks/* text eol=lf
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+LICENSE         text eol=lf
