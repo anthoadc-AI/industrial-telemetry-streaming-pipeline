@@ -44,7 +44,8 @@ CASES = [
         "non_ascii": "señal ºC — ñandú", "emoji": "\U0001F527", "quote": 'say "hi"', "backslash": "C\\path",
         "controls": "tab\tnewline\ncr\rnul-free\u0001end", "slash": "a/b"}},
     {"level": "INFO", "event": "latency", "extra": {
-        "ts_to_receive_ms": 3.018, "ts_to_produce_ms": 3.261, "ts_to_ack_ms": 109.344}},
+        "event_to_receive_ms": 3.018, "receive_to_produce_ms": 0.243, "produce_to_ack_ms": 44.5,
+        "event_to_ack_ms": 47.761, "receive_ts_ms": 1790889302300.123}},
 ]
 
 NODE_SCRIPT = r"""
@@ -114,6 +115,48 @@ def test_lines_are_valid_compact_json():
         assert json.dumps(entry, separators=(",", ":"), ensure_ascii=False) == line, f"not compact: {line!r}"
 
 
+# Absolute times in milliseconds with a fraction: the bridge's receive_ts_ms and the
+# consumer's alarm_ack_ts_ms. Python writes them through jsonlog; Node must read the
+# same value. (A value whose fraction is .000 is written 1790889302300.0 by Python and
+# 1790889302300 by Node, the integral-float difference above; the value is the same.)
+TIMESTAMP_VALUES = [
+    round(1_790_889_302_300_123_456 / 1e6, 3),   # from time.time_ns(), as the bridge computes it
+    1790889302300.0, 1790889302300.001, 1790889302300.999, 1790889302300.5,
+    1999999999999.999, 1700000000000.001,
+]
+
+NODE_READ_SCRIPT = r"""
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { input += chunk; });
+process.stdin.on('end', () => {
+  const values = input.split('\n').filter(Boolean).map((line) => JSON.parse(line).receive_ts_ms);
+  process.stdout.write(JSON.stringify(values));
+});
+"""
+
+
+def test_millisecond_timestamps_read_the_same_in_python_and_node():
+    buffer = io.StringIO()
+    previous = list(logging.getLogger().handlers), logging.getLogger().level
+    try:
+        jsonlog.configure("INFO", stream=buffer)
+        for value in TIMESTAMP_VALUES:
+            logging.getLogger("bridge.mqtt_to_kafka").info("message_delivered", extra={"receive_ts_ms": value})
+    finally:
+        logging.getLogger().handlers[:], level = previous
+        logging.getLogger().setLevel(level)
+    lines = buffer.getvalue()
+    python_read = [json.loads(line)["receive_ts_ms"] for line in lines.splitlines()]
+    node = shutil.which("node")
+    assert node, "node is not on PATH"
+    result = subprocess.run([node, "-e", NODE_READ_SCRIPT], input=lines.encode("utf-8"), capture_output=True, check=True)
+    node_read = json.loads(result.stdout)
+    assert python_read == TIMESTAMP_VALUES
+    assert node_read == python_read  # the same doubles, value for value
+    assert python_read[0] == 1790889302300.123
+
+
 if __name__ == "__main__":
     py, js = python_lines(), node_lines()
     for a, b in zip(py, js):
@@ -121,4 +164,5 @@ if __name__ == "__main__":
         print("node:  ", b)
     test_same_lines_excluding_ts()
     test_lines_are_valid_compact_json()
+    test_millisecond_timestamps_read_the_same_in_python_and_node()
     print(f"PASS: {len(py)} records, identical excluding ts")

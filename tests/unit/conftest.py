@@ -78,6 +78,9 @@ class FakeProducer:
     def on(self, topic):
         return [r for r in self.records if r["topic"] == topic]
 
+    def __len__(self):  # like Producer: records not yet reported
+        return len(self.pending)
+
 
 @pytest.fixture
 def cfg():

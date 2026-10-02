@@ -46,7 +46,8 @@ def test_pipeline_end_to_end(stack, offsets_mark, log_dir):
     assert {a: sorted(v) for a, v in seqs.items()} == {a: list(range(10)) for a in seqs} and len(seqs) == 5
 
     delivered = b.find("message_delivered")
-    assert len(delivered) == 50 and all({"ts_to_receive_ms", "ts_to_produce_ms", "ts_to_ack_ms"} <= d.keys() for d in delivered)
+    assert len(delivered) == 50 and all({"event_to_receive_ms", "receive_to_produce_ms", "produce_to_ack_ms", "event_to_ack_ms",
+                                                     "receive_ts_ms"} <= d.keys() for d in delivered)
     assert s.non_json_lines() == b.non_json_lines() == 0
 
 

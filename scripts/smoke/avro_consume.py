@@ -12,7 +12,7 @@ earliest offset. For each record it checks that:
 It then reports the count, the schema ids seen, records per partition and per
 asset, and whether each asset's seq runs contiguously from 0 without
 duplicates. With --bridge-log (the bridge's JSON-lines stderr), it also
-reports min, max and mean of the bridge latency fields of the delivered
+reports min, p50, p95 and max of the bridge latency fields of the delivered
 messages.
 
 Exit status: 0 when exactly --count records were read and every check
@@ -22,7 +22,6 @@ passed, 1 otherwise.
 import argparse
 import json
 import os
-import statistics
 import sys
 import time
 import uuid
@@ -44,7 +43,8 @@ from confluent_kafka.schema_registry.avro import AvroDeserializer  # noqa: E402
 warnings.showwarning = _showwarning
 from confluent_kafka.serialization import MessageField, SerializationContext  # noqa: E402
 
-LATENCY_FIELDS = ("ts_to_receive_ms", "ts_to_produce_ms", "ts_to_ack_ms")
+# The bridge's per-stage latency fields (Phase 3, Task 3.1-A).
+LATENCY_FIELDS = ("event_to_receive_ms", "receive_to_produce_ms", "produce_to_ack_ms", "event_to_ack_ms")
 
 
 def latency_summary(path: Path) -> dict:
@@ -56,8 +56,14 @@ def latency_summary(path: Path) -> dict:
         if entry.get("event") == "message_delivered":
             for f in LATENCY_FIELDS:
                 values[f].append(entry[f])
-    return {f: {"n": len(v), "min": min(v), "max": max(v), "mean": round(statistics.fmean(v), 3)}
+    return {f: {"n": len(v), "min": min(v), "p50": percentile(v, 50), "p95": percentile(v, 95), "max": max(v)}
             for f, v in values.items() if v}
+
+
+def percentile(values: list[float], p: float) -> float:
+    """Nearest-rank percentile."""
+    ordered = sorted(values)
+    return ordered[max(0, -(-len(ordered) * p // 100) - 1)]
 
 
 def main() -> int:
@@ -125,7 +131,7 @@ def main() -> int:
         print(f"first record: {records[0]}")
     if args.bridge_log:
         for field, s in latency_summary(args.bridge_log).items():
-            print(f"bridge {field}: n={s['n']} min={s['min']} max={s['max']} mean={s['mean']}")
+            print(f"bridge {field}: n={s['n']} min={s['min']} p50={s['p50']} p95={s['p95']} max={s['max']}")
     for problem in problems:
         print(f"PROBLEM: {problem}")
     print("result:", "PASS" if not problems else "FAIL")

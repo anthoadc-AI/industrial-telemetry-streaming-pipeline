@@ -24,9 +24,15 @@ message is acknowledged to the broker on receipt and cannot be fetched again,
 so stopping the bridge would not save it and would halt all valid telemetry
 behind it. The ERROR line is then the message's last copy.
 
-Threads: the paho network thread only enqueues received messages; the main
-thread validates, serialises, produces, serves delivery reports and handles
-signals and run bounds.
+Threads: the paho network thread only enqueues received messages, with their
+receive times; the main thread validates, serialises, produces and handles
+signals and run bounds; a delivery-report thread sits in producer.poll(),
+which returns as soon as a report is queued, and runs every delivery
+callback, for telemetry and for dead letters. Counters written by callbacks
+are guarded by a lock. If the delivery-report thread dies (an exception out of
+poll() or out of a callback), the bridge stops producing, logs
+delivery_reports_failed and exits 1: producing with nobody serving reports
+would leave every delivery unconfirmed.
 
 Stopping: at --count received messages, after --duration seconds, or on
 SIGINT, SIGTERM or (Windows) SIGBREAK. The bridge then disconnects from MQTT,
@@ -39,12 +45,31 @@ Delivery semantics: MQTT QoS 1 messages are acknowledged to the broker on
 receipt, before Kafka confirms them. A clean stop loses nothing already
 received; a crash can lose messages still queued in the bridge.
 
-Latency fields (stable names, used by the Phase 3 benchmark), logged per
-delivered message in event "message_delivered", all in milliseconds from the
-message's own ts (the simulator's clock, the same host in this setup):
-    ts_to_receive_ms   ts -> the bridge received the MQTT message
-    ts_to_produce_ms   ts -> the bridge handed the record to the producer
-    ts_to_ack_ms       ts -> Kafka acknowledged the record
+Latency fields, logged per delivered message in event "message_delivered",
+in milliseconds. One per stage; every clock is on this host (no broker
+timestamp is used):
+    event_to_receive_ms    message ts -> the bridge received the MQTT message
+                           (wall clock: the simulator's datetime.now and the
+                           bridge's time.time_ns, the same system clock)
+    receive_to_produce_ms  received -> handed to producer.produce()
+                           (time.perf_counter, monotonic)
+    produce_to_ack_ms      produce() -> the broker's acknowledgement, observed
+                           in the delivery callback (time.perf_counter); the
+                           delivery-report thread serves callbacks as soon as
+                           they are queued, so this carries no polling delay
+    event_to_ack_ms        the sum of the three
+    receive_ts_ms          absolute receive time, milliseconds since the
+                           epoch with three decimals (time.time_ns() / 1e6,
+                           to the microsecond), so a benchmark can join these
+                           lines with its own send times by (asset_id, seq).
+                           Same unit as the alarm consumer's alarm_ack_ts_ms;
+                           a double holds it exactly, so Python and
+                           JavaScript read the same value
+The message ts has millisecond resolution and is truncated, not rounded, by
+the simulator: event_to_receive_ms and event_to_ack_ms overstate by 0 to 1 ms.
+These replace ts_to_receive_ms, ts_to_produce_ms and ts_to_ack_ms (Phase 3,
+Task 3.1-A). ts_to_ack_ms was taken when the main loop next polled the
+producer, up to 100 ms after the acknowledgement; it is gone, not redefined.
 """
 
 from __future__ import annotations
@@ -75,6 +100,12 @@ log = logging.getLogger("bridge.mqtt_to_kafka")
 CONNECT_TIMEOUT_S = 10.0
 KAFKA_METADATA_TIMEOUT_S = 10.0
 DETAIL_MAX = 1000
+# producer.poll() returns as soon as a delivery report is queued; the timeout
+# only bounds how long the delivery-report thread takes to notice a stop.
+POLL_TIMEOUT_S = 0.2
+# A full local producer queue is retried after this pause; the delivery-report
+# thread drains it meanwhile.
+BUFFER_RETRY_S = 0.05
 
 
 def _positive_int(text: str) -> int:
@@ -117,6 +148,13 @@ class Stats:
     dlq_delivered: int = 0
     dlq_failed: int = 0
     invalid: Counter = field(default_factory=Counter)
+    # Delivery callbacks run on the delivery-report thread; every counter they
+    # write is changed under this lock, from either thread.
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def add(self, name: str, n: int = 1) -> None:
+        with self.lock:
+            setattr(self, name, getattr(self, name) + n)
 
     def as_dict(self) -> dict:
         return {"messages_received": self.received, "messages_invalid": sum(self.invalid.values()),
@@ -134,7 +172,8 @@ class Bridge:
         self.dlq_schema_str = self.dlq_topic.value_schema.read_text(encoding="utf-8")
         self.mqtt_topic = cfg.topics.mqtt_telemetry
         self.validator = TelemetryValidator(self.kafka_topic.value_schema, self.mqtt_topic.template)
-        self.inbox: queue.Queue[tuple[str, bytes, float]] = queue.Queue()
+        # (MQTT topic, payload, receive wall time in ns, receive perf_counter)
+        self.inbox: queue.Queue[tuple[str, bytes, int, float]] = queue.Queue()
         self.subscribed = threading.Event()
         self.stats = Stats()
         self.producer: Producer | None = None
@@ -143,6 +182,9 @@ class Bridge:
         self.dlq_serializer = None
         self.dlq_context = None
         self.mqtt: mqtt.Client | None = None
+        self._reports_stop = threading.Event()
+        self.reports_failed = threading.Event()
+        self._reports_thread: threading.Thread | None = None
 
     # --- start-up --------------------------------------------------------
 
@@ -215,6 +257,47 @@ class Bridge:
             return False
         return True
 
+    # --- delivery reports (their own thread) -----------------------------
+
+    def start_delivery_reports(self) -> None:
+        """Serve delivery reports from a dedicated thread, as soon as they are queued."""
+        self._reports_thread = threading.Thread(target=self._serve_delivery_reports, name="delivery-reports",
+                                                daemon=True)
+        self._reports_thread.start()
+
+    def _serve_delivery_reports(self) -> None:
+        try:
+            while not self._reports_stop.is_set():
+                self.producer.poll(POLL_TIMEOUT_S)
+        except BaseException as e:  # whatever escapes poll() or a callback ends the service; report it
+            self.reports_failed.set()
+            log.error("delivery_reports_failed", extra={"error": f"{type(e).__name__}: {e}"})
+
+    def stop_delivery_reports(self) -> None:
+        if self._reports_thread is not None:
+            self._reports_stop.set()
+            self._reports_thread.join()
+            self._reports_thread = None
+
+    def _produce(self, topic: str, key: bytes | None, value: bytes, on_delivery, timing: dict) -> bool:
+        """produce(), retried while the local queue is full.
+
+        timing["produce"] is set to the perf_counter of the accepted call
+        before the call is made: the callback can run on the delivery-report
+        thread before produce() has even returned. False when the
+        delivery-report thread has failed: nothing would drain the queue or
+        confirm the record, so it is not produced.
+        """
+        while True:
+            if self.reports_failed.is_set():
+                return False
+            timing["produce"] = time.perf_counter()
+            try:
+                self.producer.produce(topic, key=key, value=value, on_delivery=on_delivery)
+                return True
+            except BufferError:
+                time.sleep(BUFFER_RETRY_S)
+
     # --- MQTT callbacks (paho network thread) ----------------------------
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
@@ -237,12 +320,12 @@ class Bridge:
             log.warning("mqtt_disconnected", extra={"reason": str(reason_code)})
 
     def _on_message(self, client, userdata, message):
-        self.inbox.put((message.topic, message.payload, time.time()))
+        self.inbox.put((message.topic, message.payload, time.time_ns(), time.perf_counter()))
 
     # --- processing (main thread) ----------------------------------------
 
-    def handle(self, mqtt_topic: str, payload: bytes, received_at: float) -> None:
-        self.stats.received += 1
+    def handle(self, mqtt_topic: str, payload: bytes, received_ns: int, received_perf: float) -> None:
+        self.stats.add("received")
         try:
             record = self.validator.validate(mqtt_topic, payload)
         except InvalidMessage as e:
@@ -255,33 +338,29 @@ class Bridge:
             self.dead_letter(mqtt_topic, payload, "serialization_error", str(e))
             return
 
-        source_ts = record["ts"].timestamp()
-        context = {"asset_id": record["asset_id"], "seq": record["seq"],
-                   "ts_to_receive_ms": round((received_at - source_ts) * 1000, 3)}
+        event_to_receive_s = received_ns / 1e9 - record["ts"].timestamp()
+        context = {"asset_id": record["asset_id"], "seq": record["seq"], "receive_ts_ms": round(received_ns / 1e6, 3)}
+        timing: dict[str, float] = {}
 
-        def on_delivery(err, msg):
+        def on_delivery(err, msg):  # delivery-report thread
             if err is not None:
-                self.stats.delivery_failed += 1
+                self.stats.add("delivery_failed")
                 log.error("message_delivery_failed", extra={**context, "error": str(err)})
                 return
-            self.stats.delivered += 1
+            acked = time.perf_counter()
+            receive_to_produce_s = timing["produce"] - received_perf
+            produce_to_ack_s = acked - timing["produce"]
+            self.stats.add("delivered")
             log.info("message_delivered", extra={
                 **context, "topic": msg.topic(), "partition": msg.partition(), "offset": msg.offset(),
-                "ts_to_ack_ms": round((time.time() - source_ts) * 1000, 3),
+                "event_to_receive_ms": round(event_to_receive_s * 1000, 3),
+                "receive_to_produce_ms": round(receive_to_produce_s * 1000, 3),
+                "produce_to_ack_ms": round(produce_to_ack_s * 1000, 3),
+                "event_to_ack_ms": round((event_to_receive_s + receive_to_produce_s + produce_to_ack_s) * 1000, 3),
             })
 
-        while True:
-            produced_at = time.time()
-            context["ts_to_produce_ms"] = round((produced_at - source_ts) * 1000, 3)
-            try:
-                self.producer.produce(self.kafka_topic.name, key=record["asset_id"].encode("utf-8"), value=value,
-                                      on_delivery=on_delivery)
-                break
-            except BufferError:
-                # Local queue full: serve delivery reports, then retry.
-                self.producer.poll(0.5)
-        self.stats.produced += 1
-        self.producer.poll(0)
+        if self._produce(self.kafka_topic.name, record["asset_id"].encode("utf-8"), value, on_delivery, timing):
+            self.stats.add("produced")
 
     def dead_letter(self, mqtt_topic: str, payload: bytes, reason: str, detail: str) -> None:
         """Produce a rejected MQTT message, intact, to telemetry.dlq.
@@ -291,15 +370,17 @@ class Bridge:
         failed dead-letter send is logged at ERROR with the payload in base64
         and the bridge carries on: an MQTT message cannot be fetched again, so
         stopping would not save it (the alarm consumer, reading Kafka, stops
-        instead; see the module docstring).
+        instead; see the module docstring). The delivery callback runs on the
+        delivery-report thread.
         """
-        self.stats.invalid[reason] += 1
+        with self.stats.lock:
+            self.stats.invalid[reason] += 1
         key = self.validator.topics.asset_id(mqtt_topic)
         context = {"reason": reason, "detail": detail[:DETAIL_MAX], "source": "bridge", "mqtt_topic": mqtt_topic,
                    "key": key, "payload_bytes": len(payload)}
 
-        def failed(error: str) -> None:
-            self.stats.dlq_failed += 1
+        def failed(error: str) -> None:  # main thread or delivery-report thread
+            self.stats.add("dlq_failed")
             log.error("dlq_delivery_failed", extra={**context, "error": error,
                                                     "payload_b64": base64.b64encode(payload).decode("ascii")})
 
@@ -314,26 +395,22 @@ class Bridge:
             failed(f"cannot serialise the dead letter: {e}")
             return
 
-        def on_delivery(err, msg):
+        def on_delivery(err, msg):  # delivery-report thread
             if err is not None:
                 failed(str(err))
                 return
-            self.stats.dlq_delivered += 1
+            self.stats.add("dlq_delivered")
             log.warning("message_dead_lettered", extra={**context, "topic": msg.topic(), "partition": msg.partition(),
                                                         "offset": msg.offset()})
 
-        while True:
-            try:
-                self.producer.produce(self.dlq_topic.name, key=key.encode("utf-8") if key else None, value=value,
-                                      on_delivery=on_delivery)
-                break
-            except BufferError:
-                self.producer.poll(0.5)
-        self.producer.poll(0)
+        if not self._produce(self.dlq_topic.name, key.encode("utf-8") if key else None, value, on_delivery, {}):
+            failed("not produced: the delivery-report thread has failed")
 
     def run(self, stop: threading.Event) -> str:
         start = time.monotonic()
         while True:
+            if self.reports_failed.is_set():
+                return "delivery_reports_failed"
             if stop.is_set():
                 return "signal"
             if self.args.duration is not None and time.monotonic() - start >= self.args.duration:
@@ -343,7 +420,6 @@ class Bridge:
             try:
                 item = self.inbox.get(timeout=0.1)
             except queue.Empty:
-                self.producer.poll(0)
                 continue
             self.handle(*item)
 
@@ -351,20 +427,31 @@ class Bridge:
         if self.mqtt is not None:
             self.mqtt.disconnect()
             self.mqtt.loop_stop()
+        # Anything still queued is processed while the delivery-report thread
+        # runs, unless the run ended at --count or because that thread failed.
         unprocessed = 0
         while True:
             try:
                 item = self.inbox.get_nowait()
             except queue.Empty:
                 break
-            if reason == "count":
+            if reason in ("count", "delivery_reports_failed"):
                 unprocessed += 1
             else:
                 self.handle(*item)
-        remaining = self.producer.flush(self.args.flush_timeout) if self.producer is not None else 0
+        self.stop_delivery_reports()
+        # flush() serves the remaining delivery reports on this thread.
+        remaining = 0
+        if self.producer is not None:
+            try:
+                remaining = self.producer.flush(self.args.flush_timeout)
+            except Exception as e:  # a callback failing again here must not hide the summary
+                log.error("flush_failed", extra={"error": f"{type(e).__name__}: {e}"})
+                remaining = len(self.producer)  # messages still in the producer queue
         summary = {"reason": reason, **self.stats.as_dict(), "messages_unprocessed": unprocessed,
                    "messages_undelivered_at_exit": remaining}
-        complete = remaining == 0 and self.stats.delivery_failed == 0 and self.stats.dlq_failed == 0
+        complete = (remaining == 0 and self.stats.delivery_failed == 0 and self.stats.dlq_failed == 0
+                    and not self.reports_failed.is_set())
         if reason == "startup_failed":
             log.info("shutdown_after_startup_failure", extra=summary)
         elif complete:
@@ -400,7 +487,11 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     stop = threading.Event()
     install_signal_handlers(stop)
 
-    if not (bridge.start_kafka() and bridge.start_schema_registry() and bridge.start_mqtt()):
+    if not (bridge.start_kafka() and bridge.start_schema_registry()):
+        bridge.shutdown("startup_failed")
+        return 1
+    bridge.start_delivery_reports()
+    if not bridge.start_mqtt():
         bridge.shutdown("startup_failed")
         return 1
     log.info("run_started", extra={"count": args.count, "duration_s": args.duration,

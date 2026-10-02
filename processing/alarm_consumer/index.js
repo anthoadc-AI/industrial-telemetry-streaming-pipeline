@@ -125,7 +125,7 @@ async function main() {
         for (const client of [consumer, producer, admin]) {
           if (client) await client.disconnect().catch((e) => log.warning('disconnect_failed', { error: e.message }));
         }
-        const summary = { reason, ...counters, active_at_exit: engine.active().length };
+        const summary = { reason, ...counters, active_at_exit: engine.active().length, clocks: kafkaSide.clockReading() };
         if (code === 0) log.info('run_finished', summary);
         else log.error('run_failed', summary);
         return code;
@@ -195,6 +195,7 @@ async function main() {
   log.info('run_started', {
     group_id: args.groupId, raw_topic: rawTopic, alarms_topic: alarmsTopic, dlq_topic: dlqTopic, rules: config.rules.length,
     level_alarms: config.rules.length * 2, count: args.count ?? null, duration_s: args.duration ?? null,
+    clocks: kafkaSide.clockReading(),
   });
   if (args.duration !== undefined) {
     durationTimer = setTimeout(() => stop('duration', 0).then((code) => process.exit(code)), args.duration * 1000);

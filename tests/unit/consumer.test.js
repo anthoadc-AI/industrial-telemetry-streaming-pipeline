@@ -13,7 +13,7 @@ const jsonlog = require('../../common/jsonlog');
 
 const {
   decodeTelemetry, runConsumer, readActiveAlarms, checkTopics, registerSchema,
-  createKafka, createProducer, createRegistry, TransientRegistryError,
+  createKafka, createProducer, createRegistry, TransientRegistryError, hrWallMs, clockReading,
 } = consumerModule;
 
 const RULE = {
@@ -140,6 +140,21 @@ describe('runConsumer handler', () => {
     expect(c.counters.alarms_raised).toBe(1);
     expect(lines.find((l) => l.event === 'alarm_raised')).toMatchObject({ source_offset: '4', severity: 'WARNING' });
     expect(order).toEqual(['send']);
+  });
+
+  test('alarm lines carry the Task 3.1-A latency fields, timed at the broker acknowledgement', async () => {
+    const lines = captureLogs();
+    // The fake broker acknowledges the alarm 30 ms after send().
+    const producer = { send: jest.fn(() => new Promise((resolve) => { setTimeout(resolve, 30); })) };
+    const c = await startConsumer({ producer });
+    for (let seq = 0; seq < 5; seq += 1) await c.deliver(seq, framed(3, sample(seq, 5.0)));
+    const raised = lines.find((l) => l.event === 'alarm_raised');
+    expect(raised.consume_to_alarm_ack_ms).toBeGreaterThanOrEqual(29);
+    expect(raised.consume_to_alarm_ack_ms).toBeLessThan(500);
+    // ts of seq 4 is 1790889306000; the acknowledgement time is absolute, on the high-resolution wall clock
+    expect(raised.event_to_alarm_ack_ms).toBeCloseTo(raised.alarm_ack_ts_ms - 1790889306000, 2);
+    expect(Math.abs(raised.alarm_ack_ts_ms - Date.now())).toBeLessThan(1000);
+    expect(Number.isInteger(raised.alarm_ack_ts_ms * 1000)).toBe(true); // rounded to microseconds
   });
 
   test('a cleared alarm is counted', async () => {
@@ -310,5 +325,25 @@ describe('start-up helpers', () => {
     const kafka = createKafka({ brokers: ['localhost:9092'], clientId: 'test' });
     expect(typeof createProducer(kafka).send).toBe('function');
     expect(typeof createRegistry('http://localhost:8081').decode).toBe('function');
+  });
+});
+
+describe('clocks', () => {
+  test('hrWallMs is wall-clock time with sub-millisecond resolution', () => {
+    const before = Date.now();
+    const hr = hrWallMs();
+    const after = Date.now();
+    expect(hr).toBeGreaterThan(before - 50);
+    expect(hr).toBeLessThan(after + 50);
+    const steps = new Set(Array.from({ length: 200 }, () => hrWallMs() % 1));
+    expect(steps.size).toBeGreaterThan(1); // fractions of a millisecond, unlike Date.now()
+  });
+
+  test('clockReading reports both wall clocks and their difference', () => {
+    const r = clockReading();
+    expect(Object.keys(r).sort()).toEqual(['date_now_ms', 'hr_minus_date_now_ms', 'hr_wall_ms']);
+    expect(Number.isInteger(r.date_now_ms)).toBe(true);
+    expect(r.hr_minus_date_now_ms).toBeCloseTo(r.hr_wall_ms - r.date_now_ms, 2);
+    expect(Math.abs(r.hr_minus_date_now_ms)).toBeLessThan(50);
   });
 });

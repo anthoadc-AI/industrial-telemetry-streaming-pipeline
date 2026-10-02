@@ -42,7 +42,43 @@
  * opposite (logs the payload and carries on). The asymmetry follows the
  * source: this consumer reads Kafka and can re-read an uncommitted offset, so
  * stopping loses nothing; the bridge reads MQTT, which cannot redeliver.
+ *
+ * Latency fields (Phase 3, Task 3.1-A), on every alarm_raised and
+ * alarm_cleared line, in milliseconds; every clock is on this host:
+ *   consume_to_alarm_ack_ms  the handler received the telemetry message ->
+ *                            Kafka acknowledged the alarm (await send
+ *                            resolves on the broker's response); monotonic,
+ *                            process.hrtime
+ *   event_to_alarm_ack_ms    the sample's ts -> that acknowledgement, on the
+ *                            high-resolution wall clock below
+ *   alarm_ack_ts_ms          that acknowledgement as an absolute time, so a
+ *                            benchmark can join it with its own send times;
+ *                            milliseconds with a fraction, not an integer of
+ *                            nanoseconds, which a double cannot hold exactly
+ * Date.now() resolves 1 ms, too coarse for these. The wall clock used is
+ * performance.timeOrigin + performance.now(): sub-millisecond, but fixed at
+ * process start, so it does not follow later system clock adjustments;
+ * clockReading() reports it beside Date.now() at start and at exit so the
+ * divergence over a run is visible. The sample ts has millisecond resolution
+ * and is truncated by the simulator: event_to_alarm_ack_ms overstates by 0 to
+ * 1 ms.
  */
+
+/** Wall-clock time in milliseconds with sub-millisecond resolution. */
+function hrWallMs() {
+  return performance.timeOrigin + performance.now();
+}
+
+/** Both wall clocks, for the run_started and run_finished lines. */
+function clockReading() {
+  const hr = hrWallMs();
+  const wall = Date.now();
+  return { date_now_ms: wall, hr_wall_ms: Math.round(hr * 1000) / 1000, hr_minus_date_now_ms: Math.round((hr - wall) * 1000) / 1000 };
+}
+
+function roundMs(value) {
+  return Math.round(value * 1000) / 1000;
+}
 
 const { Kafka, logLevel, Partitioners, ConfigResourceTypes } = require('kafkajs');
 const { SchemaRegistry, SchemaType } = require('@kafkajs/confluent-schema-registry');
@@ -225,6 +261,7 @@ async function runConsumer({ kafka, registry, engine, groupId, rawTopic, alarmsT
   await consumer.run({
     autoCommit: true,
     eachMessage: async ({ topic, partition, message }) => {
+      const receivedHr = process.hrtime.bigint();
       let decoded;
       try {
         decoded = await decodeTelemetry(registry, message.value);
@@ -269,11 +306,16 @@ async function runConsumer({ kafka, registry, engine, groupId, rawTopic, alarmsT
       for (const event of engine.process(sample)) {
         const value = await registry.encode(alarmSchemaId, event);
         await producer.send({ topic: alarmsTopic, acks: -1, messages: [{ key: event.alarm_id, value }] });
+        const ackedHr = process.hrtime.bigint();
+        const ackedWall = hrWallMs();
         counters[event.state === 'RAISED' ? 'alarms_raised' : 'alarms_cleared'] += 1;
         log.info(event.state === 'RAISED' ? 'alarm_raised' : 'alarm_cleared', {
           alarm_id: event.alarm_id, asset_id: event.asset_id, channel: event.channel, severity: event.severity,
           value: event.value, threshold: event.threshold, source_seq: event.source_seq, sample_ts: event.ts,
           source_partition: partition, source_offset: message.offset,
+          consume_to_alarm_ack_ms: roundMs(Number(ackedHr - receivedHr) / 1e6),
+          event_to_alarm_ack_ms: roundMs(ackedWall - Number(event.ts)),
+          alarm_ack_ts_ms: roundMs(ackedWall),
         });
       }
       counters.messages_processed += 1;
@@ -304,5 +346,5 @@ function createRegistry(host) {
 
 module.exports = {
   createKafka, createProducer, createRegistry, checkTopics, registerSchema, readActiveAlarms, runConsumer,
-  decodeTelemetry, TransientRegistryError,
+  decodeTelemetry, TransientRegistryError, hrWallMs, clockReading,
 };
