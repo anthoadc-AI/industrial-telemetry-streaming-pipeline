@@ -87,9 +87,9 @@ services:
       # Topics are created explicitly from config/topics.yaml by `make up`;
       # a typo in a topic name must fail, not create a new topic.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      # No telemetry to Confluent, and no metrics reporter: Control Center,
-      # its only consumer, is not part of this stack.
-      KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE: "false"
+      # No metrics reporter: Control Center, its only consumer, is not part of
+      # this stack. Telemetry to Confluent is already off in cp-server 6.1.1
+      # (confluent.telemetry.enabled = false in the broker's startup config).
       CONFLUENT_METRICS_ENABLE: "false"
     tmpfs:
       - /var/lib/kafka/data:uid=1000,gid=1000
