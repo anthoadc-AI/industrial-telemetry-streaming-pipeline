@@ -1,4 +1,4 @@
-"""Import the four project rule chains into ThingsBoard and create the demo device.
+"""Import the project rule chains into ThingsBoard and create the demo device.
 
     python scripts/thingsboard/import_rule_chains.py
 
@@ -6,17 +6,21 @@ Reads processing/thingsboard/rule-chains/*.json, which hold two kinds of
 placeholder:
 
 - ``${FIREBASE_DB_URL}`` at the start of each Firebase REST node URL. When
-  FIREBASE_ENABLED=true it is replaced by FIREBASE_DB_URL. Otherwise it is
-  imported unresolved, the Firebase leg cannot reach anything, and the script
-  says so. ThingsBoard itself treats ``${...}`` in a URL as a message-metadata
-  lookup and leaves an unknown key as written.
+  FIREBASE_ENABLED=true it is replaced by FIREBASE_DB_URL. Otherwise the
+  Firebase leg is pruned before import (prune_firebase): the REST nodes and
+  their connections are removed, TempToFirebase and AlarmToFirebase, left
+  empty, are not imported, and the rule-chain input nodes that pointed to
+  them are removed too, so no node is left to fail on every message. Chains
+  left out are deleted from ThingsBoard if an earlier import created them,
+  by exact name, so the import is idempotent in both directions.
 - ``${RULE_CHAIN_ID:<name>}`` in each rule-chain input node, replaced by the
   id that the named chain has in this ThingsBoard instance.
 
-Steps: log in as the tenant, make sure all four chains exist (matched by
-name), write each chain's nodes and connections with the placeholders
-resolved, set "Root Rule Chain" as the root chain, and make sure the demo
-device exists with the access token TB_ACCESS_TOKEN.
+Steps: log in as the tenant, prune the Firebase leg when it is disabled,
+make sure every chain to import exists (matched by name), write each chain's
+nodes and connections with the placeholders resolved, delete the chains left
+out, set "Root Rule Chain" as the root chain, and make sure the demo device
+exists with the access token TB_ACCESS_TOKEN.
 
 Idempotent: chains and the device are found by name and updated in place, so
 re-running never duplicates them.
@@ -149,8 +153,80 @@ def render_nodes(nodes: list[dict], chain_ids: dict[str, str], firebase_url: str
     return rendered, unresolved
 
 
+REST_NODE = "org.thingsboard.rule.engine.rest.TbRestApiCallNode"
+CHAIN_INPUT_NODE = "org.thingsboard.rule.engine.flow.TbRuleChainInputNode"
+
+
+def _drop_nodes(name: str, metadata: dict, drop: set[int]) -> dict:
+    """metadata without the nodes at the indices in drop, connections re-indexed, theirs removed."""
+    keep = [i for i in range(len(metadata["nodes"])) if i not in drop]
+    new_index = {old: new for new, old in enumerate(keep)}
+    first = metadata.get("firstNodeIndex")
+    if keep and first is not None and first not in new_index:
+        raise ImportFailed(f"chain {name!r}: its first node would be removed")
+    return {
+        **metadata,
+        "nodes": [metadata["nodes"][i] for i in keep],
+        "connections": [{**c, "fromIndex": new_index[c["fromIndex"]], "toIndex": new_index[c["toIndex"]]}
+                        for c in metadata.get("connections") or []
+                        if c["fromIndex"] in new_index and c["toIndex"] in new_index],
+        "firstNodeIndex": new_index.get(first) if keep else None,
+    }
+
+
+def prune_firebase(exports: list[dict]) -> tuple[list[dict], list[str], dict[str, int]]:
+    """The exports as imported when Firebase is disabled.
+
+    1. Every REST node whose URL starts with ${FIREBASE_DB_URL} is removed with
+       its connections: disabling a node in place does not stop it running.
+    2. A chain left with no node is not imported.
+    3. Every rule-chain input node that points to a chain not imported is
+       removed with its connections, and steps 2-3 repeat until nothing
+       changes, so no reference is left dangling.
+    Returns (exports to import, names of the chains left out, counts removed).
+    Pure: the exports passed in are not modified.
+    """
+    chains = {e["ruleChain"]["name"]: json.loads(json.dumps(e)) for e in exports}
+    removed = {"rest_nodes": 0, "rule_chain_input_nodes": 0}
+    for name, export in chains.items():
+        md = export["metadata"]
+        drop = {i for i, n in enumerate(md["nodes"]) if n["type"] == REST_NODE
+                and str((n.get("configuration") or {}).get("restEndpointUrlPattern", "")).startswith(FIREBASE_PLACEHOLDER)}
+        removed["rest_nodes"] += len(drop)
+        export["metadata"] = _drop_nodes(name, md, drop)
+
+    skipped: list[str] = []
+    while True:
+        empty = [n for n, e in chains.items() if n not in skipped and not e["metadata"]["nodes"]]
+        if not empty:
+            break
+        skipped += empty
+        for name, export in chains.items():
+            if name in skipped:
+                continue
+            md = export["metadata"]
+            drop = set()
+            for i, node in enumerate(md["nodes"]):
+                m = CHAIN_REF.match(str((node.get("configuration") or {}).get("ruleChainId", "")))
+                if node["type"] == CHAIN_INPUT_NODE and m and m.group(1) in skipped:
+                    drop.add(i)
+            removed["rule_chain_input_nodes"] += len(drop)
+            export["metadata"] = _drop_nodes(name, md, drop)
+    if ROOT_CHAIN in skipped:
+        raise ImportFailed(f"pruning the Firebase leg would leave {ROOT_CHAIN!r} empty")
+    kept = [e for n, e in chains.items() if n not in skipped]
+    return kept, skipped, removed
+
+
 def import_chains(tb: ThingsBoard, firebase_url: str | None) -> dict[str, str]:
     exports = [json.loads((RULE_CHAIN_DIR / f).read_text(encoding="utf-8")) for f in CHAIN_FILES]
+    skipped: list[str] = []
+    if not firebase_url:
+        exports, skipped, removed = prune_firebase(exports)
+        log.info("firebase_leg_pruned", extra={
+            "reason": "FIREBASE_ENABLED is not true", "rest_nodes_removed": removed["rest_nodes"],
+            "rule_chain_input_nodes_removed": removed["rule_chain_input_nodes"], "chains_not_imported": skipped,
+        })
 
     chain_ids: dict[str, str] = {}
     for export in exports:
@@ -167,12 +243,12 @@ def import_chains(tb: ThingsBoard, firebase_url: str | None) -> dict[str, str]:
             chain_ids[rc["name"]] = created["id"]["id"]
             log.info("rule_chain_created", extra={"rule_chain": rc["name"], "id": created["id"]["id"]})
 
-    total_unresolved = 0
     for export in exports:
         name = export["ruleChain"]["name"]
         md = export["metadata"]
         nodes, unresolved = render_nodes(md["nodes"], chain_ids, firebase_url)
-        total_unresolved += unresolved
+        if unresolved:  # prune_firebase removes every such node; one left would fail on every message
+            raise ImportFailed(f"chain {name!r}: {unresolved} Firebase REST node(s) left unresolved")
         current = tb.request("GET", f"/api/ruleChain/{chain_ids[name]}/metadata")
         tb.request("POST", "/api/ruleChain/metadata", {
             "ruleChainId": {"entityType": "RULE_CHAIN", "id": chain_ids[name]},
@@ -185,13 +261,19 @@ def import_chains(tb: ThingsBoard, firebase_url: str | None) -> dict[str, str]:
         log.info("rule_chain_written", extra={"rule_chain": name, "nodes": len(nodes),
                                               "connections": len(md.get("connections") or [])})
 
+    # Chains this import owns but left out (Firebase disabled) are deleted if
+    # an earlier import created them, matched by exact name only, and only
+    # now: the chains that referenced them have just been rewritten without
+    # those references.
+    for name in skipped:
+        existing = tb.find_rule_chain(name)
+        if existing:
+            tb.request("DELETE", f"/api/ruleChain/{existing['id']['id']}")
+            log.info("rule_chain_deleted", extra={"rule_chain": name, "id": existing["id"]["id"],
+                                                  "reason": "FIREBASE_ENABLED is not true"})
+
     tb.request("POST", f"/api/ruleChain/{chain_ids[ROOT_CHAIN]}/root")
     log.info("rule_chain_set_root", extra={"rule_chain": ROOT_CHAIN})
-    if total_unresolved:
-        log.info("firebase_leg_disabled", extra={
-            "reason": "FIREBASE_ENABLED is not true", "rest_nodes_unresolved": total_unresolved,
-            "placeholder": FIREBASE_PLACEHOLDER, "detail": "these nodes cannot reach any database",
-        })
     return chain_ids
 
 

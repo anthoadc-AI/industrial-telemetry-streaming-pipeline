@@ -68,7 +68,89 @@ def test_the_committed_exports_render_completely():
         rendered, unresolved = irc.render_nodes(export["metadata"]["nodes"], ids, None)
         total += unresolved
         assert "${RULE_CHAIN_ID" not in json.dumps(rendered)
-    assert total == 3  # the three Firebase REST nodes stay unresolved when the sink is disabled
+    assert total == 3  # render_nodes alone leaves the three Firebase REST nodes unresolved; prune_firebase removes them
+
+
+# --- prune_firebase (Task 3.1-B) -------------------------------------------------
+
+
+def committed_exports():
+    return [json.loads((irc.RULE_CHAIN_DIR / f).read_text(encoding="utf-8")) for f in irc.CHAIN_FILES]
+
+
+def wiring(export):
+    md = export["metadata"]
+    names = [n["name"] for n in md["nodes"]]
+    return sorted((names[c["fromIndex"]], c["type"], names[c["toIndex"]]) for c in md["connections"] or [])
+
+
+def test_prune_removes_the_firebase_leg_from_the_committed_exports():
+    exports = committed_exports()
+    before = json.dumps(exports)
+    kept, skipped, removed = irc.prune_firebase(exports)
+    assert json.dumps(exports) == before  # pure: the input is not modified
+    assert sorted(skipped) == ["AlarmToFirebase", "TempToFirebase"]
+    assert removed == {"rest_nodes": 3, "rule_chain_input_nodes": 2}
+    by_name = {e["ruleChain"]["name"]: e for e in kept}
+    assert sorted(by_name) == ["CreateAndClearAlarms", "Root Rule Chain"]
+    assert "${FIREBASE_DB_URL}" not in json.dumps(kept) and "Firebase}" not in json.dumps(kept)
+
+    root = by_name["Root Rule Chain"]
+    original_root = next(e for e in exports if e["ruleChain"]["name"] == "Root Rule Chain")
+    assert len(root["metadata"]["nodes"]) == 8 and len(root["metadata"]["connections"]) == 7
+    assert wiring(root) == [w for w in wiring(original_root) if w[2] != "Firebase"]
+    assert root["metadata"]["nodes"][root["metadata"]["firstNodeIndex"]]["name"] == "Device Profile Node"
+
+    cac = by_name["CreateAndClearAlarms"]
+    assert [n["name"] for n in cac["metadata"]["nodes"]] == ["MaxTemp", "CreateAlarm", "ClearAlarm"]
+    assert wiring(cac) == [("MaxTemp", "False", "CreateAlarm"), ("MaxTemp", "True", "ClearAlarm")]
+
+
+def test_every_connection_is_valid_after_pruning():
+    kept, _, _ = irc.prune_firebase(committed_exports())
+    for export in kept:
+        md = export["metadata"]
+        n = len(md["nodes"])
+        assert 0 <= md["firstNodeIndex"] < n
+        assert all(0 <= c["fromIndex"] < n and 0 <= c["toIndex"] < n for c in md["connections"])
+
+
+def chain(name, nodes, connections=(), first=0):
+    return {"ruleChain": {"name": name}, "metadata": {"firstNodeIndex": first, "nodes": list(nodes),
+            "connections": [{"fromIndex": f, "toIndex": t, "type": k} for f, t, k in connections]}}
+
+
+FIREBASE_REST = node(REST, "Sink", restEndpointUrlPattern="${FIREBASE_DB_URL}/x.json")
+
+
+def test_pruning_cascades_through_chains_left_empty():
+    exports = [
+        chain("Root Rule Chain", [node("A", "start"), node(INPUT, "to-relay", ruleChainId="${RULE_CHAIN_ID:Relay}")],
+              [(0, 1, "Success")]),
+        chain("Relay", [node(INPUT, "to-sink", ruleChainId="${RULE_CHAIN_ID:Sink}")]),
+        chain("Sink", [FIREBASE_REST]),
+    ]
+    kept, skipped, removed = irc.prune_firebase(exports)
+    assert skipped == ["Sink", "Relay"]
+    assert removed == {"rest_nodes": 1, "rule_chain_input_nodes": 2}
+    [root] = kept
+    assert [n["name"] for n in root["metadata"]["nodes"]] == ["start"] and root["metadata"]["connections"] == []
+
+
+def test_other_rest_nodes_are_kept():
+    other = node(REST, "Elsewhere", restEndpointUrlPattern="https://example.invalid/x")
+    kept, skipped, removed = irc.prune_firebase([chain("Root Rule Chain", [node("A", "a"), other], [(0, 1, "Success")])])
+    assert skipped == [] and removed["rest_nodes"] == 0 and len(kept[0]["metadata"]["nodes"]) == 2
+
+
+def test_removing_the_first_node_of_a_non_empty_chain_is_refused():
+    with pytest.raises(irc.ImportFailed, match="its first node would be removed"):
+        irc.prune_firebase([chain("Root Rule Chain", [FIREBASE_REST, node("A", "a")], first=0)])
+
+
+def test_an_empty_root_chain_is_refused():
+    with pytest.raises(irc.ImportFailed, match="would leave 'Root Rule Chain' empty"):
+        irc.prune_firebase([chain("Root Rule Chain", [FIREBASE_REST])])
 
 
 # --- settings ----------------------------------------------------------------------
@@ -178,14 +260,20 @@ class FakeThingsBoard(irc.ThingsBoard):
         self.chains = dict(chains or {})
         self.device, self.credentials = device, credentials
         self.calls = []
+        self.created = 0
 
     def request(self, method, path, body=None, query=None, allow_404=False):
         self.calls.append((method, path, body, query))
         if path == "/api/ruleChains":
             return {"data": [{"name": n, "id": {"id": i}} for n, i in self.chains.items() if query["textSearch"] in n]}
         if method == "POST" and path == "/api/ruleChain":
-            self.chains[body["name"]] = f"new-{len(self.chains)}"
+            self.created += 1
+            self.chains[body["name"]] = f"new-{self.created}"
             return {"id": {"id": self.chains[body["name"]]}}
+        if method == "DELETE" and path.startswith("/api/ruleChain/"):
+            chain_id = path.rsplit("/", 1)[1]
+            self.chains = {n: i for n, i in self.chains.items() if i != chain_id}
+            return None
         if path.endswith("/metadata") and method == "GET":
             return {"version": 7}
         if path == "/api/tenant/devices":
@@ -195,19 +283,67 @@ class FakeThingsBoard(irc.ThingsBoard):
         return None
 
 
-def test_import_creates_missing_chains_updates_existing_and_sets_root(json_log):
+def metadata_writes(tb):
+    return [c for c in tb.calls if c[1] == "/api/ruleChain/metadata"]
+
+
+def test_import_with_firebase_disabled_writes_the_pruned_chains(json_log):
     tb = FakeThingsBoard(chains={"Root Rule Chain": "root-id"})
     ids = irc.import_chains(tb, None)
-    assert ids["Root Rule Chain"] == "root-id" and len(ids) == 4
-    metadata = [c for c in tb.calls if c[1] == "/api/ruleChain/metadata"]
-    assert len(metadata) == 4 and all(c[2]["version"] == 7 for c in metadata)
-    root_md = next(c[2] for c in metadata if c[2]["ruleChainId"]["id"] == "root-id")
-    refs = [n["configuration"]["ruleChainId"] for n in root_md["nodes"] if n["type"].endswith("TbRuleChainInputNode")]
+    assert sorted(ids) == ["CreateAndClearAlarms", "Root Rule Chain"] and ids["Root Rule Chain"] == "root-id"
+    writes = metadata_writes(tb)
+    assert len(writes) == 2 and all(c[2]["version"] == 7 for c in writes)
+    root_md = next(c[2] for c in writes if c[2]["ruleChainId"]["id"] == "root-id")
+    assert len(root_md["nodes"]) == 8 and not any(n["type"] == REST for n in root_md["nodes"])
+    refs = [n["configuration"]["ruleChainId"] for n in root_md["nodes"] if n["type"] == INPUT]
     assert refs == [ids["CreateAndClearAlarms"]]
     assert ("POST", "/api/ruleChain/root-id/root", None, None) in tb.calls
-    events = [e["event"] for e in json_log()]
-    assert events.count("rule_chain_created") == 3 and events.count("rule_chain_exists") == 1
-    assert "firebase_leg_disabled" in events
+    events = {e["event"]: e for e in json_log()}
+    assert events["firebase_leg_pruned"]["rest_nodes_removed"] == 3
+    assert events["firebase_leg_pruned"]["chains_not_imported"] == ["TempToFirebase", "AlarmToFirebase"]
+    assert "rule_chain_deleted" not in events and not any(c[0] == "DELETE" for c in tb.calls)
+
+
+def test_import_with_firebase_enabled_resolves_the_url_and_keeps_every_chain(json_log):
+    tb = FakeThingsBoard()
+    ids = irc.import_chains(tb, "https://example-db.invalid")
+    assert len(ids) == 4
+    urls = [n["configuration"]["restEndpointUrlPattern"]
+            for c in metadata_writes(tb) for n in c[2]["nodes"] if n["type"] == REST]
+    assert sorted(urls) == ["https://example-db.invalid/alarm.json", "https://example-db.invalid/temperature.json",
+                            "https://example-db.invalid/temperature.json"]
+    assert "firebase_leg_pruned" not in [e["event"] for e in json_log()]
+
+
+def test_disabling_deletes_only_the_chains_left_out_by_exact_name_after_rewriting(json_log):
+    tb = FakeThingsBoard(chains={"Root Rule Chain": "root", "CreateAndClearAlarms": "cac", "TempToFirebase": "temp",
+                                 "AlarmToFirebase": "alarm", "TempToFirebase (copy)": "someone-elses"})
+    irc.import_chains(tb, None)
+    deletes = [c for c in tb.calls if c[0] == "DELETE"]
+    assert sorted(c[1] for c in deletes) == ["/api/ruleChain/alarm", "/api/ruleChain/temp"]
+    assert tb.calls.index(deletes[0]) > max(tb.calls.index(c) for c in metadata_writes(tb))
+    assert tb.chains == {"Root Rule Chain": "root", "CreateAndClearAlarms": "cac", "TempToFirebase (copy)": "someone-elses"}
+    deleted = [e for e in json_log() if e["event"] == "rule_chain_deleted"]
+    assert sorted(e["rule_chain"] for e in deleted) == ["AlarmToFirebase", "TempToFirebase"]
+
+
+def test_import_is_idempotent_in_both_directions(json_log):
+    tb = FakeThingsBoard()
+    enabled = irc.import_chains(tb, "https://example-db.invalid")
+    disabled = irc.import_chains(tb, None)
+    assert sorted(tb.chains) == ["CreateAndClearAlarms", "Root Rule Chain"]
+    assert irc.import_chains(tb, None) == disabled  # same mode again: same ids, nothing created or deleted
+    again = irc.import_chains(tb, "https://example-db.invalid")
+    assert sorted(again) == sorted(enabled)
+    for stable in ("Root Rule Chain", "CreateAndClearAlarms"):
+        assert again[stable] == enabled[stable] == disabled[stable]
+    assert again["TempToFirebase"] != enabled["TempToFirebase"]  # recreated, so a new id
+
+
+def test_an_unresolved_firebase_node_stops_the_import(monkeypatch):
+    monkeypatch.setattr(irc, "prune_firebase", lambda exports: (exports, [], {"rest_nodes": 0, "rule_chain_input_nodes": 0}))
+    with pytest.raises(irc.ImportFailed, match=r"Firebase REST node\(s\) left unresolved"):
+        irc.import_chains(FakeThingsBoard(), None)
 
 
 def test_duplicate_chain_names_stop_the_import():
