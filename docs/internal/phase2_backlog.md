@@ -28,3 +28,12 @@ Source: `docs/internal/phase1_closure_report.md`, sections 8.2 and 8.3, copied v
 
 - **kafkajs maintenance risk** (owner, 2026-10-01). The alarm consumer uses `kafkajs` 2.2.4, the latest release, published 2023-02-27; the project has published nothing since. It is the owner's choice and does not block Phase 2. The maintained alternative, if kafkajs becomes a problem (for example on a future Node.js major), is `@confluentinc/kafka-javascript`, Confluent's client built on librdkafka, the library the Python bridge already uses.
 - **kafkajs on Node.js 24: `TimeoutNegativeWarning` at start-up** (found in Task 2.2, 2026-10-01). Every start of the alarm consumer emits one Node.js warning, "-<epoch ms> is a negative number. Timeout duration was set to 1.", from a timeout kafkajs 2.2.4 computes internally. Node.js clamps it to 1 ms; no effect was observed. The consumer routes process warnings through the JSON logger, so stderr stays JSON-only. Another sign of the kafkajs maintenance risk above.
+
+## Notes for the Phase 2 closure report
+
+- **The 41 first-run ruff findings were style only** (Task 2.6, commit `7802211`, assessed at owner request, DETENTE 2.6.a). None hid a defect:
+  - 37 × E501 (line over 130 characters). One is in application code, `config/loader.py` line 283, the allowed-keys call `_keys(...)` in `_parse_telemetry`; the fix only wraps the argument list, and the key sets are unchanged. The other 36 are test tables and asserts.
+  - 2 × E741 (a variable named `l`), in tests; renamed to `d` and `line`.
+  - 1 × F401: `import subprocess` in `tests/unit/test_check_secrets.py` was dead; the tests patch `cs.subprocess.run` through the module under test, so they never needed their own import.
+  - 1 × F841: `tau = 600.0` in `test_temperature_is_a_first_order_lag` was assigned and never read. The test is still correct: it steps 600 s and expects `exp(-1)`, one time constant, because motor-01's `time_constant_s` in `config/telemetry.yaml` is 600. The remaining weakness is not a defect: the test hard-codes the 600 and the 40 °C rise instead of reading them from config, so a config change makes it fail, not pass silently.
+- Already agreed for this report, recorded here so they are not lost: the two defects the unit tests found in Task 2.4 (`7a29126` fix(config), `8913426` fix(processing)); the first part of the Task 2.5 report; the `make down` behaviour with profiles (a plain `down` leaves ThingsBoard running, Compose v2.40.3).
