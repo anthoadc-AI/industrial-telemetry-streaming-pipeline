@@ -1,0 +1,11 @@
+# Phase 3 Backlog
+
+Items recorded during Phase 3 for a later task, with where they come from. Phase 2 items that carried over are in `docs/internal/phase2_backlog.md` and in section 8 of the Phase 2 closure report.
+
+## For the design of Task 3.2 (ThingsBoard as the operations layer)
+
+- **The ThingsBoard sink must tolerate tombstones with unknown keys on `telemetry.alarms`** (owner, 2026-10-02). The topic is compacted and keyed by `alarm_id`, and not every record on it is an alarm event: since `f28516f` the integration test `test_restore_after_real_compaction` writes one tombstone per partition with a reserved key (`it-roll-marker/<partition>`) to force a segment roll, and compaction itself turns superseded records into gaps. A tombstone has a null value and a key that need not match any alarm. The sink must skip such records (or treat them as deletions of an alarm it never saw) without failing, without dead-lettering them, and without blocking its consumer group. The alarm consumer's own restore already does this (`readActiveAlarms`: a tombstone deletes the key, a no-op for an unknown one).
+
+## For Task 3.4 (architecture document)
+
+- **A CLEARED event stays in the active segment until the next write to its partition** (owner, 2026-10-02). The broker evaluates `segment.ms` only when it appends to a partition, and the log cleaner never compacts the active segment. So on `telemetry.alarms`, the RAISED record of a cleared alarm is removed only after another record lands in the same partition and closes the segment holding the CLEARED. With alarms keyed by `alarm_id`, which contains a timestamp, which partition receives the next write is chance; on a quiet partition the RAISED/CLEARED pair can stay uncompacted indefinitely. This is not a correctness problem (readers keep the latest event per `alarm_id`, and the restore reads the CLEARED), but it means compaction does not bound the topic's size by time. Verified on 2026-10-02 on a scratch topic with `segment.ms` 1000 (no roll in 40 s without writes; the old record gone about 20 s after one unrelated write); root cause of the CI failure of run 37070295558, fixed in `5b28fd1`. `ARCHITECTURE.md` should state it under delivery semantics or the compaction policy, with the broker settings that govern it (`segment.ms`, `min.cleanable.dirty.ratio`, `log.cleaner.backoff.ms`).
