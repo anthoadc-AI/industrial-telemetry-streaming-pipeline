@@ -256,7 +256,7 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
    - Checkout
    - Set up Python 3.13
    - Install dependencies: pip install -r requirements.txt
-   - Lint: flake8 (or similar; optional in Phase 2, but advisable)
+   - Lint: ruff (E, F) and node --check (owner decision 2026-10-01)
    - Unit tests: pytest tests/unit/ --cov --cov-report=xml
    - Integration tests: pytest tests/integration/ (requires docker-in-docker or service containers)
    - Upload coverage: codecov (optional; phase 3)
@@ -273,19 +273,23 @@ Runs unit tests (pytest in .venv) + integration tests (compose + tools), reports
 
 ---
 
-### Task 2.7: Makefile Updates
+### Task 2.7: Makefile Consolidation
 
-**New targets:**
-- `make test` — runs `pytest tests/unit/ && pytest tests/integration/`
-- `make lint` (optional Phase 2, advised) — `flake8 src/ tests/`
-- `make coverage` — pytest with coverage report, exits if < 80%
+**Owner correction (2026-10-02):** the 2-minute limit applies to `make test` (unit tests only), not to integration. Most targets below already exist from Tasks 2.5 and 2.6; this task consolidates them, fixes what is inconsistent, and makes the Makefile the single documented entry point.
 
-**Update existing:**
-- `make down` — document that named volumes are kept (add to help)
+**Existing targets (from Tasks 1.7, 2.5, 2.6):** `install`, `up`, `up-core`, `down`, `check-secrets`, `lint`, `test`, `test-integration`, `test-integration-full`.
 
-**Verification:** `make test` on a fresh clone (after `make install && make up`) passes in < 2 min.
+**Steps:**
+1. Audit: list every target, what it runs, and whether it is documented in `make help`. Report any target that exists but is undocumented, or documented but drifted from what it runs.
+2. `make help` as the default target (running `make` alone prints it), one line per target, grouped: stack / quality / tools.
+3. `make coverage`: pytest and Jest with coverage reports written to disk (`coverage.xml`, `coverage/lcov.info`), same thresholds as `make test`; `.gitignore` covers the output.
+4. `make clean`: removes test artefacts, coverage output, `__pycache__`, `.pytest_cache`; never touches Docker volumes or `.env`.
+5. `make smoke`: the Phase 1 section 3 smoke run as a single target (stack must be up), so the manual verification is reproducible without the scratch shell script.
+6. `make down` help text states that named volumes are kept and that `--profile full` is always passed.
+7. Cross-platform: every target works from Git Bash and PowerShell on Windows and from bash on Linux (CI). Report any target that needed a platform branch.
+8. Time `make test` on a fresh clone after `make install`: must be under 2 minutes.
 
-**DETENTE 2.7.a:** `make test` passes, `make lint` (if added) passes. Confirm.
+**DETENTE 2.7.a:** audit table (target, command, documented, platform notes), output of `make help`, timing of `make test` on a fresh clone, and `make smoke` producing the Phase 1 counts (200/200).
 
 ---
 
