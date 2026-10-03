@@ -325,6 +325,48 @@ async function runConsumer({ kafka, registry, engine, groupId, rawTopic, alarmsT
   return consumer;
 }
 
+/**
+ * The asset a record belongs to: the first '/'-separated segment of its key.
+ * An alarm_id is asset_id/channel/severity/<ts>; a dead letter's key is the
+ * asset_id itself.
+ */
+function assetOfKey(key) {
+  return String(key).split('/')[0];
+}
+
+/**
+ * Partitioner for everything this consumer produces: the record keeps its key,
+ * but the partition is chosen from the asset alone (Task 3.2, owner decision).
+ *
+ * Why key and partition use different fields:
+ * - The key must be the alarm_id. telemetry.alarms is compacted on it, and
+ *   the state restore relies on the latest event per alarm_id.
+ * - The partition must be the asset. Kafka orders records only within a
+ *   partition, and the ThingsBoard sink must see an asset's alarm events in
+ *   the order they were produced: its alarm mapping applies an event only if
+ *   it is newer than the last one applied for that asset and alarm type. With
+ *   the partition chosen from the alarm_id (the default), consecutive alarms
+ *   of one asset land on different partitions and a lagging or replaying
+ *   reader can see a newer alarm before an older one, which it then drops
+ *   (measured in Task 3.2: 19 of 48 alarms kept after a replay).
+ * Any other producer writing to telemetry.alarms with the default partitioner
+ * would break that order for the assets it writes; this function is the
+ * contract, and docs/ARCHITECTURE.md (Task 3.4) records it.
+ *
+ * The partition is kafkajs's default (Java-compatible murmur2) of the asset,
+ * so it matches what a Java or librdkafka murmur2 producer keyed by asset_id
+ * would choose. A record without a key keeps the default behaviour.
+ */
+function AssetPartitioner() {
+  const byDefault = Partitioners.DefaultPartitioner();
+  return ({ topic, partitionMetadata, message }) => {
+    if (message.key === null || message.key === undefined) {
+      return byDefault({ topic, partitionMetadata, message });
+    }
+    return byDefault({ topic, partitionMetadata, message: { ...message, key: assetOfKey(message.key) } });
+  };
+}
+
 function createProducer(kafka) {
   // kafkajs logs "Limiting retries for the idempotent producer may invalidate
   // EoS guarantees" because the client's retries are bounded (5). That is
@@ -334,9 +376,8 @@ function createProducer(kafka) {
   return kafka.producer({
     idempotent: true,
     maxInFlightRequests: 1,
-    // kafkajs 2.x warns when the default partitioner is implicit; it is the
-    // Java-compatible murmur2 partitioner, chosen explicitly here.
-    createPartitioner: Partitioners.DefaultPartitioner,
+    // Partition by asset, key by alarm_id: see AssetPartitioner.
+    createPartitioner: AssetPartitioner,
   });
 }
 
@@ -346,5 +387,5 @@ function createRegistry(host) {
 
 module.exports = {
   createKafka, createProducer, createRegistry, checkTopics, registerSchema, readActiveAlarms, runConsumer,
-  decodeTelemetry, TransientRegistryError, hrWallMs, clockReading,
+  decodeTelemetry, TransientRegistryError, hrWallMs, clockReading, AssetPartitioner, assetOfKey,
 };

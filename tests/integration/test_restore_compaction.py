@@ -69,7 +69,7 @@ def test_restore_after_real_compaction(stack, offsets_mark, fresh_group, log_dir
     episode2 = {e["alarm_id"] for e in raised_a} - episode1
     assert episode1 and episode2 and len(raised_a) == len(episode1) + len(episode2)
     produced = len(raised_a) + len(cleared_a)
-    markers = it.roll_every_partition("telemetry.alarms", int(FAST_COMPACTION["segment.ms"]))
+    it.roll_every_partition("telemetry.alarms", int(FAST_COMPACTION["segment.ms"]))
 
     # Wait for the cleaner: compaction drops episode 1's RAISED records, leaving gaps.
     started = time.monotonic()
@@ -87,10 +87,14 @@ def test_restore_after_real_compaction(stack, offsets_mark, fresh_group, log_dir
         states[r["key"].decode()] = r["value"]["state"]
     assert {k: v for k, v in states.items() if k in episode1} == dict.fromkeys(episode1, "CLEARED")
 
+    # Every record ever written to the topic, by any test of the session, markers included: the offsets.
+    written = sum(it.watermarks("telemetry.alarms").values())
     consumer_b = it.alarm_consumer(log_dir, "consumer-b", group, count=100, duration=600)
     restored = consumer_b.find("alarms_restored")[0]
     assert set(restored["alarm_ids"]) == episode2
-    assert restored["records_read"] < produced + markers  # it read the compacted log (markers included)
+    # It read the compacted log: fewer records than were ever written (the restore reads the whole topic,
+    # so the bound is the topic's total, not this test's own records).
+    assert restored["records_read"] < written, (restored["records_read"], written)
 
     assert it.simulator(log_dir, "sim-4-faults", 50, *FAULTS, seed=34).finish() == 0
     time.sleep(3)

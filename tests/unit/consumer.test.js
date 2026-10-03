@@ -10,10 +10,12 @@
 const consumerModule = require('../../processing/alarm_consumer/consumer');
 const { AlarmEngine } = require('../../processing/alarm_consumer/state_machine');
 const jsonlog = require('../../common/jsonlog');
+const { Partitioners } = require('kafkajs');
 
 const {
   decodeTelemetry, runConsumer, readActiveAlarms, checkTopics, registerSchema,
   createKafka, createProducer, createRegistry, TransientRegistryError, hrWallMs, clockReading,
+  AssetPartitioner, assetOfKey,
 } = consumerModule;
 
 const RULE = {
@@ -345,5 +347,44 @@ describe('clocks', () => {
     expect(Number.isInteger(r.date_now_ms)).toBe(true);
     expect(r.hr_minus_date_now_ms).toBeCloseTo(r.hr_wall_ms - r.date_now_ms, 2);
     expect(Math.abs(r.hr_minus_date_now_ms)).toBeLessThan(50);
+  });
+});
+
+describe('AssetPartitioner (Task 3.2): key by alarm_id, partition by asset', () => {
+  const meta = (n) => ({ topic: 'telemetry.alarms', partitionMetadata: Array.from({ length: n }, (_, p) => ({ partitionId: p, leader: 1 })) });
+  const partitionOf = (key, n = 3) => AssetPartitioner()({ ...meta(n), message: { key, value: Buffer.from('x') } });
+  const byDefault = (key, n = 3) => Partitioners.DefaultPartitioner()({ ...meta(n), message: { key, value: Buffer.from('x') } });
+  const ASSETS = ['motor-01', 'motor-02', 'pump-01', 'pump-02', 'compressor-01'];
+  const CHANNELS = ['bearing_temperature_c', 'vibration_rms_mm_s', 'motor_current_a', 'speed_rpm'];
+
+  test('every alarm of an asset lands in one partition: the default partition of its asset_id', () => {
+    for (const asset of ASSETS) {
+      const partitions = new Set();
+      for (const channel of CHANNELS) {
+        for (const severity of ['WARNING', 'CRITICAL']) {
+          for (let i = 0; i < 25; i += 1) partitions.add(partitionOf(`${asset}/${channel}/${severity}/${1790889306000 + i * 1000}`));
+        }
+      }
+      expect([...partitions]).toEqual([byDefault(asset)]);
+    }
+  });
+
+  test('the default partitioner would spread one asset across partitions (the order this prevents breaking)', () => {
+    const spread = new Set(Array.from({ length: 40 }, (_, i) => byDefault(`pump-02/vibration_rms_mm_s/WARNING/${1790889306000 + i * 1000}`)));
+    expect(spread.size).toBeGreaterThan(1);
+  });
+
+  test("a dead letter keyed by asset_id goes where that asset's alarms go; a record without a key keeps the default", () => {
+    expect(partitionOf('pump-01')).toBe(partitionOf('pump-01/vibration_rms_mm_s/WARNING/1'));
+    expect(assetOfKey(Buffer.from('compressor-01/x/y/1'))).toBe('compressor-01');
+    const p = partitionOf(null);
+    expect(p >= 0 && p < 3).toBe(true);
+  });
+
+  test('the producer is created with AssetPartitioner', () => {
+    let config;
+    createProducer({ producer: (c) => { config = c; return {}; } });
+    expect(config.createPartitioner).toBe(AssetPartitioner);
+    expect(config.idempotent).toBe(true);
   });
 });
