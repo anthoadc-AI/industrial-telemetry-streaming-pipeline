@@ -52,15 +52,20 @@ def test_telemetry_entry_uses_the_sample_ts_and_drops_null_channels():
     assert "injected_fault" not in plain["values"]
 
 
+LABELS = {"vibration_rms_mm_s": "Vibration RMS"}
+
+
 def test_alarm_entry_has_one_key_per_alarm_type_and_the_raised_ts():
-    device, entry = ts.alarm_entry({**ALARM, "state": "CLEARED", "ts": 1790889316000})
+    device, entry = ts.alarm_entry({**ALARM, "state": "CLEARED", "ts": 1790889316000}, LABELS)
     assert device == "pump-01" and entry["ts"] == 1790889316000
     [(key, value)] = entry["values"].items()
     assert key == "alarm_vibration_rms_mm_s_WARNING"
     assert json.loads(value) == {"alarm_id": ALARM["alarm_id"], "state": "CLEARED", "severity": "WARNING",
-                                 "channel": "vibration_rms_mm_s", "value": 6.5, "threshold": 4.5, "raised_ts": 1790889306000}
-    _, critical = ts.alarm_entry({**ALARM, "severity": "CRITICAL", "alarm_id": "pump-01/vibration_rms_mm_s/CRITICAL/1"})
+                                 "channel": "vibration_rms_mm_s", "value": 6.5, "threshold": 4.5, "raised_ts": 1790889306000,
+                                 "type": "Vibration RMS high (warning)"}
+    _, critical = ts.alarm_entry({**ALARM, "severity": "CRITICAL", "alarm_id": "pump-01/vibration_rms_mm_s/CRITICAL/1"}, LABELS)
     assert list(critical["values"]) == ["alarm_vibration_rms_mm_s_CRITICAL"]  # same ts, another key: no overwrite
+    assert json.loads(critical["values"]["alarm_vibration_rms_mm_s_CRITICAL"])["type"] == "Vibration RMS high (critical)"
 
 
 # --- gateway ----------------------------------------------------------------------------------
@@ -249,7 +254,8 @@ def test_alarm_event_is_forwarded_with_the_configured_asset_type(sink, registry)
     sink.handle(Msg("telemetry.alarms", encode(registry, "telemetry.alarms", "alarm_v1.avsc", ALARM)))
     [(device, device_type, entry)] = sink.gateway.sent
     assert (device, device_type) == ("pump-01", "pump")
-    assert json.loads(entry["values"]["alarm_vibration_rms_mm_s_WARNING"])["raised_ts"] == 1790889306000
+    body = json.loads(entry["values"]["alarm_vibration_rms_mm_s_WARNING"])
+    assert (body["raised_ts"], body["type"]) == (1790889306000, "Vibration RMS high (warning)")  # label from config/
     assert sink.counts["alarm_events_forwarded"] == 1
 
 

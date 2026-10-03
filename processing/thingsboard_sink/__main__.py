@@ -16,9 +16,11 @@ device profile the import script created for that type.
 - An alarm event becomes one entry under the key alarm_<channel>_<severity>,
   one key per alarm type, so two alarm types of one asset at the same ts never
   overwrite each other; its value is the event as JSON (alarm_id, state,
-  severity, channel, value, threshold, raised_ts). The rule chain AlarmMapping
-  turns it into a ThingsBoard alarm. raised_ts is taken from the alarm_id,
-  which ends with the ts of the RAISED sample.
+  severity, channel, value, threshold, raised_ts, type). The rule chain
+  AlarmMapping turns it into a ThingsBoard alarm of that type. raised_ts is
+  taken from the alarm_id, which ends with the ts of the RAISED sample; type
+  is "<channel label> high (warning|critical)", the label from
+  config/telemetry.yaml, the same text the dashboard shows for the channel.
 - A record with no value on telemetry.alarms (a tombstone, such as the
   integration tests' roll markers) is skipped and counted, never failed or
   dead-lettered.
@@ -101,12 +103,17 @@ def telemetry_entry(record: dict, channels: list[str]) -> tuple[str, str, dict]:
     return record["asset_id"], record["asset_type"], {"ts": _epoch_ms(record["ts"]), "values": values}
 
 
-def alarm_entry(event: dict) -> tuple[str, dict]:
+def alarm_type(label: str, severity: str) -> str:
+    """The ThingsBoard alarm type: one per channel and severity, so HI and HIHI stay independent alarms."""
+    return f"{label} high ({severity.lower()})"
+
+
+def alarm_entry(event: dict, labels: dict[str, str]) -> tuple[str, dict]:
     """(asset_id, gateway entry) for an alarm_v1 event: one key per alarm type, the event as JSON."""
     raised_ts = int(event["alarm_id"].rsplit("/", 1)[1])
     body = {"alarm_id": event["alarm_id"], "state": event["state"], "severity": event["severity"],
             "channel": event["channel"], "value": event["value"], "threshold": event["threshold"],
-            "raised_ts": raised_ts}
+            "raised_ts": raised_ts, "type": alarm_type(labels[event["channel"]], event["severity"])}
     key = f"alarm_{event['channel']}_{event['severity']}"
     return event["asset_id"], {"ts": _epoch_ms(event["ts"]), "values": {key: json.dumps(body, separators=(",", ":"))}}
 
@@ -225,6 +232,7 @@ class Sink:
         self.dlq_topic = dlq.name
         self.dlq_schema_str = dlq.value_schema.read_text(encoding="utf-8")
         self.channels = list(cfg.telemetry.channels)
+        self.labels = {name: channel.label for name, channel in cfg.telemetry.channels.items()}
         self.asset_types = {a.id: a.type for a in cfg.telemetry.assets}
         self.token = token if token is not None else os.environ.get("TB_GATEWAY_TOKEN", "")
         self.counts: Counter = Counter()
@@ -300,7 +308,7 @@ class Sink:
             self.gateway.send(device, device_type, entry)
             self.counts["telemetry_forwarded"] += 1
         else:
-            device, entry = alarm_entry(record)
+            device, entry = alarm_entry(record, self.labels)
             self.gateway.send(device, self.asset_types.get(device), entry)
             self.counts["alarm_events_forwarded"] += 1
 

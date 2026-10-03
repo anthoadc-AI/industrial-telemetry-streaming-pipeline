@@ -9,17 +9,23 @@
 sample_interval_s: 1.0
 ambient_temperature_c: 25.0
 
+# label: the channel's human-readable name, the single source for the operations
+# dashboard's labels and for the ThingsBoard alarm types (Task 3.2).
 channels:
   bearing_temperature_c:
+    label: Bearing temperature
     unit: degC
     description: Drive-end bearing housing temperature.
   vibration_rms_mm_s:
+    label: Vibration RMS
     unit: mm/s
     description: Casing vibration, velocity RMS.
   motor_current_a:
+    label: Motor current
     unit: A
     description: Motor phase current, RMS.
   speed_rpm:
+    label: Speed
     unit: rpm
     description: Shaft speed.
 

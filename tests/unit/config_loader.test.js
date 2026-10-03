@@ -79,7 +79,7 @@ test.each([
     '    channels: []\n    load: {base: 0.75', 'telemetry.yaml.assets[motor-01].channels: expected a non-empty list'],
   ['telemetry.yaml', 'sample_interval_s: 1.0\n', '', "telemetry.yaml: missing key(s) ['sample_interval_s']"],
   ['telemetry.yaml', 'assets:\n  - id: motor-01', 'assets: []\nunused:\n  - id: motor-01', "telemetry.yaml: unknown key(s) ['unused']"],
-  ['telemetry.yaml', 'channels:\n  bearing_temperature_c:\n    unit: degC\n    description: Drive-end bearing housing temperature.\n  vibration_rms_mm_s:\n    unit: mm/s\n    description: Casing vibration, velocity RMS.\n  motor_current_a:\n    unit: A\n    description: Motor phase current, RMS.\n  speed_rpm:\n    unit: rpm\n    description: Shaft speed.\n',
+  ['telemetry.yaml', 'channels:\n  bearing_temperature_c:\n    label: Bearing temperature\n    unit: degC\n    description: Drive-end bearing housing temperature.\n  vibration_rms_mm_s:\n    label: Vibration RMS\n    unit: mm/s\n    description: Casing vibration, velocity RMS.\n  motor_current_a:\n    label: Motor current\n    unit: A\n    description: Motor phase current, RMS.\n  speed_rpm:\n    label: Speed\n    unit: rpm\n    description: Shaft speed.\n',
     'channels: {}\n', 'telemetry.yaml.channels: at least one channel is required'],
   ['topics.yaml', 'value_schema: schemas/dlq_v1.avsc', 'value_schema: schemas/missing.avsc', 'topics.yaml.kafka.telemetry_dlq.value_schema: file not found: schemas/missing.avsc'],
   ['topics.yaml', '      cleanup.policy: compact', '      cleanup.policy: [compact]', 'topics.yaml.kafka.telemetry_alarms.configs.cleanup.policy: expected a string or number'],

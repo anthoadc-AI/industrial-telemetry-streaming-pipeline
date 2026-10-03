@@ -5,8 +5,8 @@
 The dashboard JSON is the version-controlled artifact the import script loads; this script is how it is
 made, so it can be regenerated rather than edited by hand. Each widget starts from its own default
 configuration as this ThingsBoard serves it (GET /api/widgetType?fqn=...); only datasources, data keys,
-titles, alarm filters and the row-click action are set here. Asset types and channels come from
-config/telemetry.yaml. No device is named: one alias selects devices by the asset types, the other is the
+titles, alarm filters and the row-click action are set here. Asset types, channels and channel labels come
+from config/telemetry.yaml. No device is named: one alias selects devices by the asset types, the other is the
 entity a user selects. Ids are uuid5 of fixed names, so regenerating gives the same file.
 
 Content (owner review, Task 3.2): the plant view fits one 1920x1080 screen (the layout fills the window height):
@@ -36,8 +36,8 @@ OUTPUT = REPO_ROOT / "processing" / "thingsboard" / "dashboards" / "operations.j
 TITLE = "Pipeline operations"
 FQNS = ("system.time_series_chart", "system.cards.entities_table", "system.alarm_widgets.alarms_table",
         "system.alarm_count", "system.cards.markdown_card")
-LABELS = {"bearing_temperature_c": "Bearing temperature (°C)", "vibration_rms_mm_s": "Vibration RMS (mm/s)",
-          "motor_current_a": "Motor current (A)", "speed_rpm": "Speed (rpm)"}
+# How a unit in config/telemetry.yaml is written on screen; units not listed are shown as they are.
+UNIT_DISPLAY = {"degC": "°C"}
 COLORS = ["#2196f3", "#4caf50", "#f44336", "#ff9800", "#9c27b0"]
 NS = uuid.UUID("6f0e2c1a-3b7d-4c55-9a51-0d2f6a7c9e10")
 
@@ -55,9 +55,8 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
     """The dashboard as ThingsBoard's REST API takes it; defaults maps each widget fqn to its descriptor."""
     types = sorted({a.type for a in telemetry.assets})
     channels = list(telemetry.channels)
-    missing = [c for c in channels if c not in LABELS]
-    if missing:
-        raise ValueError(f"no chart label for channel(s) {missing}; add them to LABELS")
+    # Labels come from config/telemetry.yaml, the same source as the ThingsBoard alarm types.
+    LABELS = {name: f"{c.label} ({UNIT_DISPLAY.get(c.unit, c.unit)})" for name, c in telemetry.channels.items()}
     assets, selected = uid("alias-pipeline-assets"), uid("alias-selected-asset")
     aliases = {
         assets: {"id": assets, "alias": "Pipeline assets",

@@ -31,6 +31,12 @@ spec.loader.exec_module(irc)
 
 FAULTS = ("pump-01:imbalance:0",)
 SEVERITY = {"WARNING": 4.5, "CRITICAL": 7.1}
+VIBRATION = load_config(env={}).telemetry.channels["vibration_rms_mm_s"].label  # "Vibration RMS"
+
+
+def alarm_type(severity: str) -> str:
+    """The ThingsBoard alarm type the sink sets: "<channel label> high (warning|critical)"."""
+    return f"{VIBRATION} high ({severity.lower()})"
 
 
 @pytest.fixture(scope="module")
@@ -130,7 +136,7 @@ def test_a_fault_raises_then_clears_the_alarm_in_thingsboard(stack, tb, log_dir,
     assert active, f"no active ThingsBoard alarm for {ids}"
     for a in active:
         expected = next(e for e in raised if e["alarm_id"] == a["details"]["alarm_id"])
-        assert (a["type"], a["severity"]) == (f"vibration_rms_mm_s {expected['severity']}", expected["severity"])
+        assert (a["type"], a["severity"]) == (alarm_type(expected["severity"]), expected["severity"])
         assert a["details"]["threshold"] == SEVERITY[expected["severity"]]
     # An operator acknowledges the alarm in the dashboard (allowed there; clearing is not): the pipeline must
     # still clear it when the fault ends.
@@ -226,9 +232,9 @@ def test_alarm_ordering_and_replay_leave_exactly_one_alarm_per_alarm_id(stack, t
     attr = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{pump['id']['id']}/values/attributes/SERVER_SCOPE",
                       query={"keys": "alarm_last"})
     last = json.loads(attr[0]["value"])
-    assert last["vibration_rms_mm_s WARNING"] == {"alarm_id": f"pump-02/vibration_rms_mm_s/WARNING/{base + 39_000}",
+    assert last[alarm_type("WARNING")] == {"alarm_id": f"pump-02/vibration_rms_mm_s/WARNING/{base + 39_000}",
                                                   "state": "CLEARED", "raised_ts": base + 39_000}
-    assert last["vibration_rms_mm_s CRITICAL"]["raised_ts"] == base + 35_000
+    assert last[alarm_type("CRITICAL")]["raised_ts"] == base + 35_000
     for t in shared_ts:  # both alarm keys at the same timestamp: neither overwrote the other
         v = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{pump['id']['id']}/values/timeseries",
                        query={"keys": "alarm_vibration_rms_mm_s_WARNING,alarm_vibration_rms_mm_s_CRITICAL",

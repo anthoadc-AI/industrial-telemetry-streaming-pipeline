@@ -7,7 +7,6 @@ import importlib.util
 import json
 import sys
 
-import pytest
 
 from conftest import REPO_ROOT
 
@@ -61,10 +60,15 @@ def test_build_is_deterministic_and_matches_the_committed_layout(cfg, tmp_path):
     assert json.loads((tmp_path / "x" / "d.json").read_text(encoding="utf-8")) == first
 
 
-def test_a_channel_without_a_label_is_refused(cfg):
-    telemetry = dataclasses.replace(cfg.telemetry, channels=(*cfg.telemetry.channels, "oil_pressure_bar"))
-    with pytest.raises(ValueError, match="oil_pressure_bar"):
-        bd.build(DEFAULTS, telemetry)
+def test_labels_come_from_config(cfg):
+    """One source: a label changed in config/telemetry.yaml changes the dashboard (and, in the sink, the alarm type)."""
+    channels = dict(cfg.telemetry.channels)
+    channels["vibration_rms_mm_s"] = dataclasses.replace(channels["vibration_rms_mm_s"], label="Casing vibration")
+    d = bd.build(DEFAULTS, dataclasses.replace(cfg.telemetry, channels=channels))
+    labels = {k["name"]: k["label"] for w in d["configuration"]["widgets"].values()
+              for ds in (w["config"].get("datasources") or []) for k in ds["dataKeys"] if k["type"] == "timeseries"}
+    assert labels["vibration_rms_mm_s"] == "Casing vibration (mm/s)"
+    assert labels["bearing_temperature_c"] == "Bearing temperature (°C)"  # degC shown as °C
 
 
 def widgets_of(dashboard, fqn):

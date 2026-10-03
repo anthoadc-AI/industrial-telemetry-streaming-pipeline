@@ -22,6 +22,7 @@ def test_real_configuration(cfg):
     t = cfg.telemetry
     assert [a.id for a in t.assets] == ["motor-01", "motor-02", "pump-01", "pump-02", "compressor-01"]
     assert list(t.channels) == ["bearing_temperature_c", "vibration_rms_mm_s", "motor_current_a", "speed_rpm"]
+    assert [c.label for c in t.channels.values()] == ["Bearing temperature", "Vibration RMS", "Motor current", "Speed"]
     assert set(t.faults) == {"bearing_overheating", "imbalance"}
     assert t.asset("pump-02").degradation == {"bearing_temperature_c": 1.5, "vibration_rms_mm_s": 0.6}
     assert len(cfg.alarms.rules) == 15
@@ -77,6 +78,10 @@ def broken(tmp_path: Path, file: str, old: str, new: str) -> Path:
 
 CASES = [
     # telemetry.yaml
+    ("telemetry.yaml", "    label: Vibration RMS\n", "",
+     "telemetry.yaml.channels.vibration_rms_mm_s: missing key(s) ['label']"),
+    ("telemetry.yaml", "    label: Vibration RMS\n", "    label: ''\n",
+     "telemetry.yaml.channels.vibration_rms_mm_s.label: expected a non-empty string"),
     ("telemetry.yaml", "sample_interval_s: 1.0", "sample_interval_s: 1.0\nextra: 1", "telemetry.yaml: unknown key(s) ['extra']"),
     ("telemetry.yaml", "sample_interval_s: 1.0\n", "", "telemetry.yaml: missing key(s) ['sample_interval_s']"),
     ("telemetry.yaml", "sample_interval_s: 1.0", "sample_interval_s: 0", "telemetry.yaml.sample_interval_s: must be > 0"),
