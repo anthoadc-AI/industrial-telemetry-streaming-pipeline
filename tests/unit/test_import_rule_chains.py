@@ -60,7 +60,7 @@ def test_bad_chain_references(ref, message):
 
 
 def test_the_committed_exports_render_completely():
-    names = ["TempToFirebase", "AlarmToFirebase", "CreateAndClearAlarms", "Root Rule Chain"]
+    names = ["AlarmMapping", "Root Rule Chain"]
     ids = {n: f"id-{i}" for i, n in enumerate(names)}
     total = 0
     for f in irc.CHAIN_FILES:
@@ -68,7 +68,7 @@ def test_the_committed_exports_render_completely():
         rendered, unresolved = irc.render_nodes(export["metadata"]["nodes"], ids, None)
         total += unresolved
         assert "${RULE_CHAIN_ID" not in json.dumps(rendered)
-    assert total == 3  # render_nodes alone leaves the three Firebase REST nodes unresolved; prune_firebase removes them
+    assert total == 1  # render_nodes alone leaves Root's "Firebase" REST node unresolved; prune_firebase removes it
 
 
 # --- prune_firebase (Task 3.1-B) -------------------------------------------------
@@ -89,21 +89,17 @@ def test_prune_removes_the_firebase_leg_from_the_committed_exports():
     before = json.dumps(exports)
     kept, skipped, removed = irc.prune_firebase(exports)
     assert json.dumps(exports) == before  # pure: the input is not modified
-    assert sorted(skipped) == ["AlarmToFirebase", "TempToFirebase"]
-    assert removed == {"rest_nodes": 3, "rule_chain_input_nodes": 2}
+    assert skipped == [] and removed == {"rest_nodes": 1, "rule_chain_input_nodes": 0}
     by_name = {e["ruleChain"]["name"]: e for e in kept}
-    assert sorted(by_name) == ["CreateAndClearAlarms", "Root Rule Chain"]
-    assert "${FIREBASE_DB_URL}" not in json.dumps(kept) and "Firebase}" not in json.dumps(kept)
-
+    assert sorted(by_name) == ["AlarmMapping", "Root Rule Chain"]
+    assert "${FIREBASE_DB_URL}" not in json.dumps(kept)
     root = by_name["Root Rule Chain"]
     original_root = next(e for e in exports if e["ruleChain"]["name"] == "Root Rule Chain")
     assert len(root["metadata"]["nodes"]) == 8 and len(root["metadata"]["connections"]) == 7
     assert wiring(root) == [w for w in wiring(original_root) if w[2] != "Firebase"]
+    assert ("Save Timeseries", "Success", "AlarmMapping") in wiring(root)
     assert root["metadata"]["nodes"][root["metadata"]["firstNodeIndex"]]["name"] == "Device Profile Node"
-
-    cac = by_name["CreateAndClearAlarms"]
-    assert [n["name"] for n in cac["metadata"]["nodes"]] == ["MaxTemp", "CreateAlarm", "ClearAlarm"]
-    assert wiring(cac) == [("MaxTemp", "False", "CreateAlarm"), ("MaxTemp", "True", "ClearAlarm")]
+    assert by_name["AlarmMapping"] == next(e for e in exports if e["ruleChain"]["name"] == "AlarmMapping")
 
 
 def test_every_connection_is_valid_after_pruning():
@@ -113,6 +109,21 @@ def test_every_connection_is_valid_after_pruning():
         n = len(md["nodes"])
         assert 0 <= md["firstNodeIndex"] < n
         assert all(0 <= c["fromIndex"] < n and 0 <= c["toIndex"] < n for c in md["connections"])
+
+
+def test_alarm_mapping_evaluates_no_threshold():
+    """One alarm engine (Task 3.2): AlarmMapping only maps and deduplicates; its nodes are the expected ones."""
+    md = json.loads((irc.RULE_CHAIN_DIR / "alarm-mapping.json").read_text(encoding="utf-8"))["metadata"]
+    kinds = [n["type"].rsplit(".", 1)[1] for n in md["nodes"]]
+    assert kinds == ["TbGetAttributesNode", "TbTransformMsgNode", "TbJsSwitchNode", "TbCreateAlarmNode",
+                     "TbClearAlarmNode", "TbTransformMsgNode", "TbMsgAttributesNode"]
+    scripts = " ".join(str(n["configuration"].get("tbelScript", "")) for n in md["nodes"])
+    for channel in ("bearing_temperature_c", "vibration_rms_mm_s", "motor_current_a", "speed_rpm", "temperature"):
+        assert f"msg.{channel}" not in scripts
+    create, clear = md["nodes"][3]["configuration"], md["nodes"][4]["configuration"]
+    assert create["alarmType"] == clear["alarmType"] == "${alarmType}"
+    assert create["dynamicSeverity"] is True and create["severity"] == "${alarmSeverity}"
+    assert md["nodes"][0]["configuration"]["tellFailureIfAbsent"] is False  # the first event has no alarm_last yet
 
 
 def chain(name, nodes, connections=(), first=0):
@@ -253,12 +264,14 @@ def test_login_retries_while_thingsboard_starts(monkeypatch):
 
 
 class FakeThingsBoard(irc.ThingsBoard):
-    """In-memory ThingsBoard: rule chains by name, one device, every call recorded."""
+    """In-memory ThingsBoard: rule chains, device profiles and dashboards by name, one device, every call recorded."""
 
-    def __init__(self, chains=None, device=None, credentials=None):
+    def __init__(self, chains=None, device=None, credentials=None, profiles=None, dashboards=None):
         super().__init__("http://fake")
         self.chains = dict(chains or {})
         self.device, self.credentials = device, credentials
+        self.profiles = {p["name"]: p for p in (profiles or [])}
+        self.dashboards = dict(dashboards or {})
         self.calls = []
         self.created = 0
 
@@ -276,6 +289,24 @@ class FakeThingsBoard(irc.ThingsBoard):
             return None
         if path.endswith("/metadata") and method == "GET":
             return {"version": 7}
+        if path == "/api/deviceProfiles":
+            return {"data": [p for n, p in self.profiles.items() if query["textSearch"] in n]}
+        if path == "/api/deviceProfileInfo/default":
+            return {"id": {"id": "default-profile"}}
+        if path == "/api/deviceProfile/default-profile":
+            return {"id": {"id": "default-profile"}, "name": "default", "default": True, "version": 3,
+                    "profileData": {"configuration": {"type": "DEFAULT"}}, "transportType": "DEFAULT"}
+        if method == "POST" and path == "/api/deviceProfile":
+            self.profiles[body["name"]] = {**body, "id": body.get("id") or {"id": f"profile-{body['name']}"}}
+            return self.profiles[body["name"]]
+        if path == "/api/tenant/dashboards":
+            return {"data": [{"title": t, "id": {"id": i}} for t, i in self.dashboards.items() if query["textSearch"] in t]}
+        if method == "GET" and path.startswith("/api/dashboard/"):
+            return {"id": {"id": path.rsplit("/", 1)[1]}, "version": 4}
+        if method == "POST" and path == "/api/dashboard":
+            dashboard_id = (body.get("id") or {}).get("id") or "dash-new"
+            self.dashboards[body["title"]] = dashboard_id
+            return {"id": {"id": dashboard_id}}
         if path == "/api/tenant/devices":
             return self.device
         if path.startswith("/api/device/") and path.endswith("/credentials"):
@@ -290,60 +321,106 @@ def metadata_writes(tb):
 def test_import_with_firebase_disabled_writes_the_pruned_chains(json_log):
     tb = FakeThingsBoard(chains={"Root Rule Chain": "root-id"})
     ids = irc.import_chains(tb, None)
-    assert sorted(ids) == ["CreateAndClearAlarms", "Root Rule Chain"] and ids["Root Rule Chain"] == "root-id"
+    assert sorted(ids) == ["AlarmMapping", "Root Rule Chain"] and ids["Root Rule Chain"] == "root-id"
     writes = metadata_writes(tb)
     assert len(writes) == 2 and all(c[2]["version"] == 7 for c in writes)
     root_md = next(c[2] for c in writes if c[2]["ruleChainId"]["id"] == "root-id")
     assert len(root_md["nodes"]) == 8 and not any(n["type"] == REST for n in root_md["nodes"])
     refs = [n["configuration"]["ruleChainId"] for n in root_md["nodes"] if n["type"] == INPUT]
-    assert refs == [ids["CreateAndClearAlarms"]]
+    assert refs == [ids["AlarmMapping"]]
     assert ("POST", "/api/ruleChain/root-id/root", None, None) in tb.calls
     events = {e["event"]: e for e in json_log()}
-    assert events["firebase_leg_pruned"]["rest_nodes_removed"] == 3
-    assert events["firebase_leg_pruned"]["chains_not_imported"] == ["TempToFirebase", "AlarmToFirebase"]
-    assert "rule_chain_deleted" not in events and not any(c[0] == "DELETE" for c in tb.calls)
+    assert events["firebase_leg_pruned"]["rest_nodes_removed"] == 1
+    assert events["firebase_leg_pruned"]["chains_not_imported"] == []
+    assert not any(c[0] == "DELETE" for c in tb.calls)  # nothing retired was present
 
 
-def test_import_with_firebase_enabled_resolves_the_url_and_keeps_every_chain(json_log):
+def test_import_with_firebase_enabled_resolves_the_url_of_the_root_node(json_log):
     tb = FakeThingsBoard()
     ids = irc.import_chains(tb, "https://example-db.invalid")
-    assert len(ids) == 4
+    assert sorted(ids) == ["AlarmMapping", "Root Rule Chain"]
     urls = [n["configuration"]["restEndpointUrlPattern"]
             for c in metadata_writes(tb) for n in c[2]["nodes"] if n["type"] == REST]
-    assert sorted(urls) == ["https://example-db.invalid/alarm.json", "https://example-db.invalid/temperature.json",
-                            "https://example-db.invalid/temperature.json"]
+    assert urls == ["https://example-db.invalid/temperature.json"]
     assert "firebase_leg_pruned" not in [e["event"] for e in json_log()]
 
 
-def test_disabling_deletes_only_the_chains_left_out_by_exact_name_after_rewriting(json_log):
+def test_retired_chains_are_deleted_by_exact_name_after_rewriting(json_log):
     tb = FakeThingsBoard(chains={"Root Rule Chain": "root", "CreateAndClearAlarms": "cac", "TempToFirebase": "temp",
                                  "AlarmToFirebase": "alarm", "TempToFirebase (copy)": "someone-elses"})
     irc.import_chains(tb, None)
     deletes = [c for c in tb.calls if c[0] == "DELETE"]
-    assert sorted(c[1] for c in deletes) == ["/api/ruleChain/alarm", "/api/ruleChain/temp"]
+    assert sorted(c[1] for c in deletes) == ["/api/ruleChain/alarm", "/api/ruleChain/cac", "/api/ruleChain/temp"]
     assert tb.calls.index(deletes[0]) > max(tb.calls.index(c) for c in metadata_writes(tb))
-    assert tb.chains == {"Root Rule Chain": "root", "CreateAndClearAlarms": "cac", "TempToFirebase (copy)": "someone-elses"}
-    deleted = [e for e in json_log() if e["event"] == "rule_chain_deleted"]
-    assert sorted(e["rule_chain"] for e in deleted) == ["AlarmToFirebase", "TempToFirebase"]
+    assert sorted(tb.chains) == ["AlarmMapping", "Root Rule Chain", "TempToFirebase (copy)"]
+    deleted = {e["rule_chain"]: e["reason"] for e in json_log() if e["event"] == "rule_chain_deleted"}
+    assert deleted == {"CreateAndClearAlarms": "retired", "TempToFirebase": "retired", "AlarmToFirebase": "retired"}
 
 
 def test_import_is_idempotent_in_both_directions(json_log):
     tb = FakeThingsBoard()
     enabled = irc.import_chains(tb, "https://example-db.invalid")
     disabled = irc.import_chains(tb, None)
-    assert sorted(tb.chains) == ["CreateAndClearAlarms", "Root Rule Chain"]
-    assert irc.import_chains(tb, None) == disabled  # same mode again: same ids, nothing created or deleted
     again = irc.import_chains(tb, "https://example-db.invalid")
-    assert sorted(again) == sorted(enabled)
-    for stable in ("Root Rule Chain", "CreateAndClearAlarms"):
-        assert again[stable] == enabled[stable] == disabled[stable]
-    assert again["TempToFirebase"] != enabled["TempToFirebase"]  # recreated, so a new id
+    assert enabled == disabled == again and tb.created == 2  # created once, then updated in place
+    assert not any(c[0] == "DELETE" for c in tb.calls)
 
 
 def test_an_unresolved_firebase_node_stops_the_import(monkeypatch):
     monkeypatch.setattr(irc, "prune_firebase", lambda exports: (exports, [], {"rest_nodes": 0, "rule_chain_input_nodes": 0}))
     with pytest.raises(irc.ImportFailed, match=r"Firebase REST node\(s\) left unresolved"):
         irc.import_chains(FakeThingsBoard(), None)
+
+
+def test_device_profiles_are_created_on_the_sequential_queue(json_log):
+    tb = FakeThingsBoard(profiles=[{"name": "pump", "id": {"id": "p"}, "defaultQueueName": "Main"},
+                                   {"name": "motor", "id": {"id": "m"}, "defaultQueueName": "SequentialByOriginator"}])
+    irc.ensure_device_profiles(tb, ["compressor", "motor", "pump"])
+    assert {n: p["defaultQueueName"] for n, p in tb.profiles.items()} == dict.fromkeys(["pump", "motor", "compressor"],
+                                                                                         "SequentialByOriginator")
+    created = tb.profiles["compressor"]
+    assert created["default"] is False and created["defaultRuleChainId"] is None and "id" not in \
+        next(c[2] for c in tb.calls if c[0] == "POST" and c[2]["name"] == "compressor")
+    assert [e["event"] for e in json_log() if e["event"].startswith("device_profile")] == \
+        ["device_profile_created", "device_profile_ok", "device_profile_updated"]
+
+
+def test_the_gateway_device_is_created_and_flagged(json_log):
+    tb = FakeThingsBoard()
+    irc.ensure_device(tb, "GW", irc.PIPELINE_GATEWAY, gateway=True)
+    post = next(c for c in tb.calls if c[1] == "/api/device")
+    assert post[2] == {"name": "pipeline-gateway", "additionalInfo": {"gateway": True}} and post[3] == {"accessToken": "GW"}
+    tb = FakeThingsBoard(device={"id": {"id": "g"}, "name": "pipeline-gateway", "additionalInfo": {"description": "x"}},
+                         credentials={"credentialsType": "ACCESS_TOKEN", "credentialsId": "GW"})
+    irc.ensure_device(tb, "GW", irc.PIPELINE_GATEWAY, gateway=True)
+    flagged = next(c[2] for c in tb.calls if c[1] == "/api/device")
+    assert flagged["additionalInfo"] == {"description": "x", "gateway": True}
+    assert [e["event"] for e in json_log()][-2:] == ["device_gateway_flag_set", "device_token_ok"]
+
+
+def test_dashboard_is_created_then_updated_by_title(json_log, tmp_path):
+    path = tmp_path / "d.json"
+    path.write_text(json.dumps({"title": "Pipeline operations", "configuration": {"widgets": {}}}), encoding="utf-8")
+    tb = FakeThingsBoard()
+    first = irc.import_dashboard(tb, path)
+    second = irc.import_dashboard(tb, path)
+    assert first == second == "dash-new"
+    posts = [c[2] for c in tb.calls if c[0] == "POST" and c[1] == "/api/dashboard"]
+    assert "id" not in posts[0] and posts[1]["id"] == {"id": "dash-new"} and posts[1]["version"] == 4
+    assert [e["action"] for e in json_log() if e["event"] == "dashboard_written"] == ["create", "update"]
+
+
+def test_the_committed_dashboard_names_no_device_and_selects_the_configured_types(cfg):
+    text = irc.DASHBOARD_FILE.read_text(encoding="utf-8")
+    dashboard = json.loads(text)
+    assert '"entityType": "DEVICE"' not in text and '"singleEntity"' not in text
+    filters = [a["filter"] for a in dashboard["configuration"]["entityAliases"].values()]
+    by_type = next(f for f in filters if f["type"] == "deviceType")
+    assert sorted(by_type["deviceTypes"]) == sorted({a.type for a in cfg.telemetry.assets})
+    assert {f["type"] for f in filters} == {"deviceType", "stateEntity"}
+    keys = {k["name"] for w in dashboard["configuration"]["widgets"].values()
+            for d in (w["config"].get("datasources") or []) for k in d["dataKeys"] if k["type"] == "timeseries"}
+    assert keys == set(cfg.telemetry.channels)
 
 
 def test_duplicate_chain_names_stop_the_import():
