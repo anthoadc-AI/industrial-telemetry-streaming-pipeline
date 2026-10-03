@@ -132,6 +132,9 @@ def test_a_fault_raises_then_clears_the_alarm_in_thingsboard(stack, tb, log_dir,
         expected = next(e for e in raised if e["alarm_id"] == a["details"]["alarm_id"])
         assert (a["type"], a["severity"]) == (f"vibration_rms_mm_s {expected['severity']}", expected["severity"])
         assert a["details"]["threshold"] == SEVERITY[expected["severity"]]
+    # An operator acknowledges the alarm in the dashboard (allowed there; clearing is not): the pipeline must
+    # still clear it when the fault ends.
+    tb.request("POST", f"/api/alarm/{active[0]['id']['id']}/ack")
 
     assert it.simulator(log_dir, "sim-normal", 100, seed=63).finish() == 0
     assert b.finish() == 0
@@ -139,6 +142,8 @@ def test_a_fault_raises_then_clears_the_alarm_in_thingsboard(stack, tb, log_dir,
                          and len(alarms_of(tb, pump["id"]["id"], ids)) == len(ids))
     assert cleared, f"alarms not cleared: {[(a['type'], a['status']) for a in alarms_of(tb, pump['id']['id'], ids)]}"
     assert len(alarms_of(tb, pump["id"]["id"], ids)) == len(ids)  # one ThingsBoard alarm per alarm_id
+    statuses = {a["id"]["id"]: a["status"] for a in alarms_of(tb, pump["id"]["id"], ids)}
+    assert statuses[active[0]["id"]["id"]] == "CLEARED_ACK"  # acknowledged by hand, cleared by the pipeline
     assert all(p.non_json_lines() == 0 for p in (sink, consumer, b))
 
 
@@ -271,3 +276,24 @@ def test_simulator_telemetry_causes_no_rule_engine_failure(stack, tb, log_dir):
         assert stats["ruleEngineException"][1] < started, f"rule-engine exception during the run: {stats['ruleEngineException']}"
     for p in (s, b, sink):
         p.stop()
+
+
+def test_alarm_start_time_is_the_event_time_not_the_arrival(stack, tb, log_dir, offsets_mark):
+    """A RAISED event forwarded ten minutes late (a delayed replay): the ThingsBoard alarm starts at the event.
+
+    startTs, which the dashboard shows as "Start time (event)", is the event's timestamp; createdTime is when
+    ThingsBoard stored the alarm. Measured on 2026-10-03: startTs = event + 0.0 s, createdTime = event + 602 s.
+    """
+    event_ms = int(time.time() * 1000) - 600_000
+    aid = f"motor-02/bearing_temperature_c/WARNING/{event_ms}"
+    event = {**alarm_event(aid, "motor-02", "WARNING", "RAISED", event_ms, event_ms), "channel": "bearing_temperature_c"}
+    produce_alarm_events([event])
+    marks = {"telemetry.alarms": offsets_mark["telemetry.alarms"], "telemetry.raw": it.watermarks("telemetry.raw")}
+    forwarded_at = int(time.time() * 1000)
+    sink = it.thingsboard_sink(log_dir, "sink", sink_group_at(marks, "it-sink-late"), count=1)
+    assert sink.finish(120) == 0
+    motor = device(tb, "motor-02")
+    [alarm] = wait_until(lambda: alarms_of(tb, motor["id"]["id"], {aid}) or None)
+    assert alarm["startTs"] == event_ms
+    assert alarm["createdTime"] >= forwarded_at  # stored on arrival, ten minutes after the event
+    tb.request("DELETE", f"/api/alarm/{alarm['id']['id']}")  # leave no active test alarm in the shared volume
