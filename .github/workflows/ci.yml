@@ -1,19 +1,24 @@
 # Continuous integration for the industrial telemetry streaming pipeline.
 #
-# Two jobs (owner decisions, Phase 2 Task 2.6):
-#   checks       lint (ruff, node --check) and the unit tests of both languages
-#                with coverage (lines and branches >= 80 % enforced per language)
-#   integration  the integration tests on the core stack (Mosquitto, ZooKeeper,
-#                Kafka, Schema Registry); runs only when checks pass
+# Three jobs:
+#   checks            lint (ruff, node --check) and the unit tests of both
+#                     languages with coverage (lines and branches >= 80 %
+#                     enforced per language) (Phase 2 Task 2.6)
+#   integration       the integration tests on the core stack (Mosquitto,
+#                     ZooKeeper, Kafka, Schema Registry); runs only when checks
+#                     pass (Phase 2 Task 2.6)
+#   integration-full  the integration tests on the full stack, ThingsBoard
+#                     included: the ThingsBoard import, the sink, alarm
+#                     mapping. Runs only on a push to main and on a manual
+#                     dispatch, never on other branches, so it never blocks a
+#                     branch (owner decision, Phase 3 DETENTE 3.2.a)
 #
 # Triggers: a push to any branch (owner decision, Phase 3 DETENTE 3.1.a; until
 # then only main and feature/**, so docs/** branches ran no CI) and pull
 # requests to main.
 #
-# The full profile (ThingsBoard) does not run in CI: it would add about 1 GiB
-# of images and about 60 s of start-up to every push. Its tests
-# (test_rule_chains_imported_and_linked, test_import_is_idempotent) are run
-# locally with `make test-integration-full` and are a gate for closing a phase.
+# Until Phase 3 the full profile did not run in CI at all (about 1 GiB more of
+# images and 60 s more start-up per push); its tests were a local gate only.
 #
 # No retries anywhere: a failure is visible and investigated. On failure the
 # integration job uploads the component logs and `docker compose logs`.
@@ -28,6 +33,7 @@ on:
     branches: ["**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -95,6 +101,50 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-logs
+          path: ${{ runner.temp }}/pytest
+          if-no-files-found: warn
+          retention-days: 7
+
+  integration-full:
+    name: Integration tests (full stack)
+    needs: checks
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: make install
+      - name: Environment file
+        run: cp .env.example .env
+      - name: Pull full-profile images
+        run: docker compose --profile full pull
+      # The runner's ThingsBoard volume is empty, so the first start installs
+      # the database with the demo tenant; its password is the ThingsBoard CE
+      # public default, given here as an environment variable. make -e lets
+      # the environment override the empty value .env.example sets.
+      - name: Integration tests (full profile)
+        timeout-minutes: 30
+        env:
+          PYTEST_ADDOPTS: --basetemp=${{ runner.temp }}/pytest
+          TB_TENANT_PASSWORD: tenant
+        run: make -e test-integration-full
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-full-logs
           path: ${{ runner.temp }}/pytest
           if-no-files-found: warn
           retention-days: 7
