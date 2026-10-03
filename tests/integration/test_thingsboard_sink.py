@@ -138,6 +138,9 @@ def test_a_fault_raises_then_clears_the_alarm_in_thingsboard(stack, tb, log_dir,
         expected = next(e for e in raised if e["alarm_id"] == a["details"]["alarm_id"])
         assert (a["type"], a["severity"]) == (alarm_type(expected["severity"]), expected["severity"])
         assert a["details"]["threshold"] == SEVERITY[expected["severity"]]
+        # Its own start: the RAISED sample's time, the alarm_id's last segment. An alarm absorbed into an older
+        # active alarm of the same type (a ghost from an earlier session) would keep the older start.
+        assert a["startTs"] == int(a["details"]["alarm_id"].rsplit("/", 1)[1])
     # An operator acknowledges the alarm in the dashboard (allowed there; clearing is not): the pipeline must
     # still clear it when the fault ends.
     tb.request("POST", f"/api/alarm/{active[0]['id']['id']}/ack")
@@ -150,6 +153,7 @@ def test_a_fault_raises_then_clears_the_alarm_in_thingsboard(stack, tb, log_dir,
     assert len(alarms_of(tb, pump["id"]["id"], ids)) == len(ids)  # one ThingsBoard alarm per alarm_id
     statuses = {a["id"]["id"]: a["status"] for a in alarms_of(tb, pump["id"]["id"], ids)}
     assert statuses[active[0]["id"]["id"]] == "CLEARED_ACK"  # acknowledged by hand, cleared by the pipeline
+    assert all(a["startTs"] == int(a["details"]["alarm_id"].rsplit("/", 1)[1]) for a in alarms_of(tb, pump["id"]["id"], ids))
     assert all(p.non_json_lines() == 0 for p in (sink, consumer, b))
 
 
@@ -303,3 +307,78 @@ def test_alarm_start_time_is_the_event_time_not_the_arrival(stack, tb, log_dir, 
     assert alarm["startTs"] == event_ms
     assert alarm["createdTime"] >= forwarded_at  # stored on arrival, ten minutes after the event
     tb.request("DELETE", f"/api/alarm/{alarm['id']['id']}")  # leave no active test alarm in the shared volume
+
+
+def alarm_last(tb, device_id):
+    attr = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{device_id}/values/attributes/SERVER_SCOPE",
+                      query={"keys": "alarm_last"})
+    return json.loads(attr[0]["value"])
+
+
+def forward(log_dir, name, events):
+    """Produce alarm events to telemetry.alarms and forward exactly those with a new sink group."""
+    marks = {"telemetry.alarms": it.watermarks("telemetry.alarms"), "telemetry.raw": it.watermarks("telemetry.raw")}
+    produce_alarm_events(events)
+    sink = it.thingsboard_sink(log_dir, name, sink_group_at(marks, f"it-sink-{name}"), count=len(events))
+    assert sink.finish(120) == 0
+    assert sink.find("run_finished")[0]["alarm_events_forwarded"] == len(events)
+
+
+def test_make_up_reconciliation_clears_an_alarm_lost_with_kafka(stack, tb, log_dir):
+    """Owner decision, Task 3.2 (ghost alarms, option A): the import run by make up reconciles ThingsBoard with
+    telemetry.alarms.
+
+    (a) X is raised through Kafka and the sink. (b) Kafka loses telemetry.alarms, as at every make up: the topic
+    is recreated empty, and Y, another alarm of the asset, is raised on it. (c) The import: X is cleared with the
+    reason in its details and one alarm_reconciled event; Y stays active; alarm_last says X is CLEARED. (d) A
+    replay of X is dropped, and Z, a new alarm of X's type, is a new ThingsBoard alarm with its own start time
+    (without reconciliation it would update X and keep X's start). Y and Z are then cleared through the pipeline.
+    """
+    asset, warning, critical = "motor-01", alarm_type("WARNING"), alarm_type("CRITICAL")
+    now = int(time.time() * 1000)
+    x, y, z = (f"{asset}/vibration_rms_mm_s/WARNING/{now}", f"{asset}/vibration_rms_mm_s/CRITICAL/{now + 1000}",
+               f"{asset}/vibration_rms_mm_s/WARNING/{now + 2000}")
+    motor = device(tb, asset)["id"]["id"]
+
+    def one_active(alarm_id):
+        return wait_until(lambda: [a for a in alarms_of(tb, motor, {alarm_id}) if a["status"].startswith("ACTIVE")] or None)
+
+    # (a)
+    forward(log_dir, "recon-a", [alarm_event(x, asset, "WARNING", "RAISED", now, now)])
+    [ghost] = one_active(x)
+    # (b)
+    it.delete_topic("telemetry.alarms")
+    it.provision()
+    forward(log_dir, "recon-b", [alarm_event(y, asset, "CRITICAL", "RAISED", now + 1000, now + 1000)])
+    [alarm_y] = one_active(y)
+    # (c)
+    result = it.run_module("scripts/thingsboard/import_rule_chains.py")
+    assert result.returncode == 0, result.stderr[-800:]
+    events = it.json_events(result.stderr)
+    reconciled = [e for e in events if e["event"] == "alarm_reconciled"]
+    assert [(e["asset"], e["type"], e["alarm_id"], e["thingsboard_alarm_id"]) for e in reconciled] == [
+        (asset, warning, x, ghost["id"]["id"])]
+    assert reconciled[0]["reason"] == "not in telemetry.alarms: Kafka starts empty at make up, its CLEARED event was lost"
+    [done] = [e for e in events if e["event"] == "alarm_reconciliation_done"]
+    assert (done["alarms_cleared"], done["alarms_active_in_topic"]) == (1, 1)
+    [cleared] = alarms_of(tb, motor, {x})
+    assert cleared["status"] == "CLEARED_UNACK" and cleared["details"]["cleared_by"] == "reconciliation"
+    assert [a["status"] for a in alarms_of(tb, motor, {y})] == ["ACTIVE_UNACK"]
+    last = alarm_last(tb, motor)
+    assert last[warning] == {"alarm_id": x, "state": "CLEARED", "raised_ts": now}
+    assert last[critical] == {"alarm_id": y, "state": "RAISED", "raised_ts": now + 1000}
+    # (d) a replay of X (RAISED, CLEARED) is dropped as a duplicate; Z starts a new alarm of X's type
+    forward(log_dir, "recon-d", [alarm_event(x, asset, "WARNING", "RAISED", now, now),
+                                 alarm_event(x, asset, "WARNING", "CLEARED", now, now + 500),
+                                 alarm_event(z, asset, "WARNING", "RAISED", now + 2000, now + 2000)])
+    [alarm_z] = one_active(z)
+    assert alarm_z["id"] != ghost["id"] and alarm_z["type"] == warning and alarm_z["startTs"] == now + 2000
+    [x_after] = alarms_of(tb, motor, {x})  # still one alarm for X, cleared, with its own start
+    assert (x_after["id"], x_after["status"], x_after["startTs"]) == (ghost["id"], "CLEARED_UNACK", now)
+    assert alarm_last(tb, motor)[warning] == {"alarm_id": z, "state": "RAISED", "raised_ts": now + 2000}
+    # Leave nothing active: Y and Z end through the pipeline, as any fault does.
+    forward(log_dir, "recon-end", [alarm_event(y, asset, "CRITICAL", "CLEARED", now + 1000, now + 3000),
+                                   alarm_event(z, asset, "WARNING", "CLEARED", now + 2000, now + 3000)])
+    assert wait_until(lambda: all(a["status"] == "CLEARED_UNACK" for a in alarms_of(tb, motor, {y, z}))), \
+        alarms_of(tb, motor, {y, z})
+    assert not [a for a in it.active_pipeline_alarms(tb) if a["asset"] == asset]

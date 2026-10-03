@@ -384,3 +384,42 @@ def framed(schema_id: int, schema: dict, record: dict) -> bytes:
 
 def telemetry_schema() -> dict:
     return json.loads((REPO_ROOT / "schemas" / "telemetry_v1.avsc").read_text(encoding="utf-8"))
+
+
+# --- ThingsBoard --------------------------------------------------------------------
+
+
+def import_script():
+    """scripts/thingsboard/import_rule_chains.py as a module: its REST client, settings and paging."""
+    import importlib.util
+
+    name = "import_rule_chains_support"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / "thingsboard" / "import_rule_chains.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def thingsboard():
+    irc = import_script()
+    tb = irc.ThingsBoard(f"http://localhost:{irc.setting('TB_HTTP_PORT', '8080')}")
+    tb.login(irc.setting("TB_TENANT_USERNAME"), irc.setting("TB_TENANT_PASSWORD"))
+    return tb
+
+
+def active_pipeline_alarms(tb) -> list[dict]:
+    """Active ThingsBoard alarms raised by the pipeline, in the scope of the import's reconciliation:
+    devices of the configured asset types, alarms whose details carry an alarm_id."""
+    from config.loader import load_config
+
+    irc = import_script()
+    found = []
+    for asset_type in sorted({a.type for a in load_config(env={}).telemetry.assets}):
+        for d in irc._pages(tb, "/api/tenant/devices", {"type": asset_type}):
+            for a in irc._pages(tb, f"/api/alarm/DEVICE/{d['id']['id']}", {"searchStatus": "ACTIVE"}):
+                if (a.get("details") or {}).get("alarm_id"):
+                    found.append({"asset": d["name"], "type": a["type"], "alarm_id": a["details"]["alarm_id"],
+                                  "status": a["status"]})
+    return found
