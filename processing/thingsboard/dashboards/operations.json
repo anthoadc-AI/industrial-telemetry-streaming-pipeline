@@ -6,8 +6,8 @@
       "2d60c287-b383-57f5-981a-511a9b149e52": {
         "typeFullFqn": "system.cards.entities_table",
         "type": "latest",
-        "sizeX": 24,
-        "sizeY": 6,
+        "sizeX": 18,
+        "sizeY": 8,
         "config": {
           "timewindow": {
             "realtime": {
@@ -32,7 +32,7 @@
             "displayEntityName": false,
             "displayEntityLabel": false,
             "displayEntityType": false,
-            "displayPagination": true,
+            "displayPagination": false,
             "defaultPageSize": 10,
             "defaultSortOrder": "name",
             "useRowStyleFunction": false,
@@ -134,7 +134,7 @@
         "typeFullFqn": "system.alarm_count",
         "type": "latest",
         "sizeX": 6,
-        "sizeY": 2,
+        "sizeY": 4,
         "config": {
           "datasources": [
             {
@@ -295,7 +295,7 @@
         "typeFullFqn": "system.alarm_count",
         "type": "latest",
         "sizeX": 6,
-        "sizeY": 2,
+        "sizeY": 4,
         "config": {
           "datasources": [
             {
@@ -456,12 +456,12 @@
         "typeFullFqn": "system.alarm_widgets.alarms_table",
         "type": "alarm",
         "sizeX": 24,
-        "sizeY": 6,
+        "sizeY": 8,
         "config": {
           "timewindow": {
             "realtime": {
               "interval": 1000,
-              "timewindowMs": 86400000
+              "timewindowMs": 2592000000
             },
             "aggregation": {
               "type": "NONE",
@@ -477,7 +477,7 @@
             "enableSearch": true,
             "displayDetails": true,
             "allowAcknowledgment": true,
-            "allowClear": true,
+            "allowClear": false,
             "allowAssign": true,
             "displayActivity": true,
             "displayPagination": true,
@@ -487,7 +487,7 @@
             "enableStickyAction": false,
             "enableFilter": true,
             "entitiesTitle": null,
-            "alarmsTitle": "Alarms"
+            "alarmsTitle": "Active alarms"
           },
           "title": "Active alarms",
           "dropShadow": true,
@@ -503,9 +503,9 @@
             "type": "entity",
             "dataKeys": [
               {
-                "name": "createdTime",
+                "name": "startTime",
                 "type": "alarm",
-                "label": "Created time",
+                "label": "Start time (event)",
                 "color": "#2196f3",
                 "settings": {
                   "useCellStyleFunction": false,
@@ -598,6 +598,90 @@
           "alarmFilterConfig": null
         },
         "id": "5eaa985d-4cb9-5426-ba88-fe5843566938"
+      },
+      "4597a42c-d0c6-5ef4-a64c-77d3ce13c477": {
+        "typeFullFqn": "system.cards.markdown_card",
+        "type": "latest",
+        "sizeX": 24,
+        "sizeY": 3,
+        "config": {
+          "datasources": [
+            {
+              "type": "entity",
+              "name": "",
+              "entityAliasId": "0d03d7c4-d30c-5304-8b22-f6c8c2339621",
+              "filterId": null,
+              "dataKeys": [
+                {
+                  "name": "name",
+                  "type": "entityField",
+                  "label": "Asset",
+                  "color": "#2196f3",
+                  "settings": {},
+                  "_hash": 0.1
+                },
+                {
+                  "name": "type",
+                  "type": "entityField",
+                  "label": "Type",
+                  "color": "#4caf50",
+                  "settings": {},
+                  "_hash": 0.11
+                }
+              ]
+            }
+          ],
+          "timewindow": {
+            "realtime": {
+              "timewindowMs": 60000
+            }
+          },
+          "showTitle": true,
+          "backgroundColor": "#fff",
+          "color": "rgba(0, 0, 0, 0.87)",
+          "padding": "0px",
+          "settings": {
+            "useMarkdownTextFunction": false,
+            "markdownTextPattern": "### ${entityName}\nCharts follow the dashboard's time window.",
+            "markdownTextFunction": "return '# Some title\\n - Entity name: ' + data[0]['entityName'];",
+            "applyDefaultMarkdownStyle": true,
+            "markdownCss": ""
+          },
+          "title": "Selected asset",
+          "showTitleIcon": false,
+          "iconColor": "rgba(0, 0, 0, 0.87)",
+          "iconSize": "24px",
+          "titleTooltip": "",
+          "dropShadow": true,
+          "enableFullscreen": true,
+          "widgetStyle": {},
+          "titleStyle": {
+            "fontSize": "16px",
+            "fontWeight": 400
+          },
+          "showLegend": false,
+          "useDashboardTimewindow": true,
+          "displayTimewindow": true,
+          "actions": {
+            "headerButton": [
+              {
+                "name": "Back to all assets",
+                "icon": "arrow_back",
+                "type": "openDashboardState",
+                "targetDashboardStateId": "default",
+                "setEntityId": false,
+                "stateEntityParamName": null,
+                "openRightLayout": false,
+                "openInSeparateDialog": false,
+                "openInPopover": false,
+                "showIcon": true,
+                "buttonType": "stroked",
+                "id": "ed9644bf-4f78-521c-ae5f-25c040001d88"
+              }
+            ]
+          }
+        },
+        "id": "4597a42c-d0c6-5ef4-a64c-77d3ce13c477"
       },
       "0b7cd661-121b-5920-a314-e33f4f01b009": {
         "typeFullFqn": "system.time_series_chart",
@@ -834,7 +918,7 @@
             },
             "padding": "12px"
           },
-          "title": "Bearing temperature (°C)",
+          "title": "${entityName}: Bearing temperature (°C)",
           "dropShadow": true,
           "enableFullscreen": true,
           "titleStyle": null,
@@ -1119,7 +1203,7 @@
             },
             "padding": "12px"
           },
-          "title": "Vibration RMS (mm/s)",
+          "title": "${entityName}: Vibration RMS (mm/s)",
           "dropShadow": true,
           "enableFullscreen": true,
           "titleStyle": null,
@@ -1404,7 +1488,7 @@
             },
             "padding": "12px"
           },
-          "title": "Motor current (A)",
+          "title": "${entityName}: Motor current (A)",
           "dropShadow": true,
           "enableFullscreen": true,
           "titleStyle": null,
@@ -1689,7 +1773,7 @@
             },
             "padding": "12px"
           },
-          "title": "Speed (rpm)",
+          "title": "${entityName}: Speed (rpm)",
           "dropShadow": true,
           "enableFullscreen": true,
           "titleStyle": null,
@@ -1748,26 +1832,26 @@
           "main": {
             "widgets": {
               "2d60c287-b383-57f5-981a-511a9b149e52": {
-                "sizeX": 24,
-                "sizeY": 6,
+                "sizeX": 18,
+                "sizeY": 8,
                 "row": 0,
                 "col": 0
               },
               "bdb40101-cbf2-55de-b919-a76f08c3b3f4": {
                 "sizeX": 6,
-                "sizeY": 2,
-                "row": 6,
-                "col": 0
+                "sizeY": 4,
+                "row": 0,
+                "col": 18
               },
               "db7c395d-0707-55be-a00a-765a335728d0": {
                 "sizeX": 6,
-                "sizeY": 2,
-                "row": 6,
-                "col": 6
+                "sizeY": 4,
+                "row": 4,
+                "col": 18
               },
               "5eaa985d-4cb9-5426-ba88-fe5843566938": {
                 "sizeX": 24,
-                "sizeY": 6,
+                "sizeY": 8,
                 "row": 8,
                 "col": 0
               }
@@ -1777,7 +1861,9 @@
               "columns": 24,
               "margin": 10,
               "outerMargin": true,
-              "backgroundSizeMode": "100%"
+              "backgroundSizeMode": "100%",
+              "autoFillHeight": true,
+              "mobileAutoFillHeight": false
             }
           }
         }
@@ -1788,28 +1874,34 @@
         "layouts": {
           "main": {
             "widgets": {
+              "4597a42c-d0c6-5ef4-a64c-77d3ce13c477": {
+                "sizeX": 24,
+                "sizeY": 3,
+                "row": 0,
+                "col": 0
+              },
               "0b7cd661-121b-5920-a314-e33f4f01b009": {
                 "sizeX": 12,
                 "sizeY": 6,
-                "row": 0,
+                "row": 3,
                 "col": 0
               },
               "e49b7c52-4ba1-511b-a614-0cca8fba5005": {
                 "sizeX": 12,
                 "sizeY": 6,
-                "row": 0,
+                "row": 3,
                 "col": 12
               },
               "9694562c-8e1b-51d3-9209-eb4542d0d576": {
                 "sizeX": 12,
                 "sizeY": 6,
-                "row": 6,
+                "row": 9,
                 "col": 0
               },
               "79f1b33e-0c37-5ebb-8ed5-5aa3d0ebcf59": {
                 "sizeX": 12,
                 "sizeY": 6,
-                "row": 6,
+                "row": 9,
                 "col": 12
               }
             },
@@ -1818,7 +1910,9 @@
               "columns": 24,
               "margin": 10,
               "outerMargin": true,
-              "backgroundSizeMode": "100%"
+              "backgroundSizeMode": "100%",
+              "autoFillHeight": true,
+              "mobileAutoFillHeight": false
             }
           }
         }

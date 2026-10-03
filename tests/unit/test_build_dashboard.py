@@ -22,7 +22,15 @@ DEFAULTS = {
     "system.alarm_widgets.alarms_table": {"type": "alarm", "defaultConfig": {"alarmSource": {"type": "function", "dataKeys": []},
                                                                            "alarmFilterConfig": {"statusList": []}}},
     "system.alarm_count": {"type": "latest", "defaultConfig": {"datasources": [], "settings": {"label": "Total"}}},
+    "system.cards.markdown_card": {"type": "latest",
+                                   "defaultConfig": {"datasources": [], "settings": {"markdownTextPattern": "x"}}},
 }
+DEFAULTS["system.alarm_widgets.alarms_table"]["defaultConfig"].update({
+    "alarmSource": {"type": "function", "dataKeys": [{"name": "createdTime", "type": "alarm", "label": "Created time"},
+                                                     {"name": "originator", "type": "alarm", "label": "Originator"}]},
+    "settings": {"allowClear": True, "allowAcknowledgment": True, "allowAssign": True, "alarmsTitle": "Alarms"},
+    "timewindow": {"realtime": {"interval": 1000, "timewindowMs": 86_400_000}},
+})
 
 
 def test_build_selects_assets_by_type_and_charts_every_channel(cfg):
@@ -32,7 +40,7 @@ def test_build_selects_assets_by_type_and_charts_every_channel(cfg):
     [by_type] = [a["filter"] for a in c["entityAliases"].values() if a["filter"]["type"] == "deviceType"]
     assert by_type["deviceTypes"] == sorted({a.type for a in cfg.telemetry.assets})
     asset_state = c["states"]["asset"]["layouts"]["main"]["widgets"]
-    charts = [c["widgets"][w] for w in asset_state]
+    charts = [c["widgets"][w] for w in asset_state if c["widgets"][w]["typeFullFqn"] == "system.time_series_chart"]
     assert [w["config"]["datasources"][0]["dataKeys"][0]["name"] for w in charts] == list(cfg.telemetry.channels)
     counts = [w for w in c["widgets"].values() if w["typeFullFqn"] == "system.alarm_count"]
     severities = sorted(w["config"]["datasources"][0]["alarmFilterConfig"]["severityList"][0] for w in counts)
@@ -57,3 +65,42 @@ def test_a_channel_without_a_label_is_refused(cfg):
     telemetry = dataclasses.replace(cfg.telemetry, channels=(*cfg.telemetry.channels, "oil_pressure_bar"))
     with pytest.raises(ValueError, match="oil_pressure_bar"):
         bd.build(DEFAULTS, telemetry)
+
+
+def widgets_of(dashboard, fqn):
+    return [w for w in dashboard["configuration"]["widgets"].values() if w["typeFullFqn"] == fqn]
+
+
+def test_alarm_table_cannot_clear_and_shows_the_event_time(cfg):
+    """Owner review: one alarm engine, so no manual clear; acknowledge and assign stay; time = startTs (the event's)."""
+    [alarms] = widgets_of(bd.build(DEFAULTS, cfg.telemetry), "system.alarm_widgets.alarms_table")
+    settings = alarms["config"]["settings"]
+    assert (settings["allowClear"], settings["allowAcknowledgment"], settings["allowAssign"]) == (False, True, True)
+    assert settings["alarmsTitle"] == "Active alarms"
+    keys = [k["name"] for k in alarms["config"]["alarmSource"]["dataKeys"]]
+    assert keys[0] == "startTime" and "createdTime" not in keys and "originator" in keys
+    assert alarms["config"]["timewindow"]["realtime"]["timewindowMs"] == 30 * 86_400_000
+
+
+def test_plant_view_fits_one_screen_and_shows_every_asset(cfg):
+    d = bd.build(DEFAULTS, cfg.telemetry)
+    main = d["configuration"]["states"]["default"]["layouts"]["main"]
+    assert main["gridSettings"]["autoFillHeight"] is True
+    [table] = widgets_of(d, "system.cards.entities_table")
+    assert table["config"]["settings"]["displayPagination"] is False
+    assert table["config"]["settings"]["defaultPageSize"] >= len(cfg.telemetry.assets)
+    rows = {w: (p["row"], p["row"] + p["sizeY"]) for w, p in main["widgets"].items()}
+    [alarms] = widgets_of(d, "system.alarm_widgets.alarms_table")
+    assert rows[alarms["id"]][0] >= rows[table["id"]][1]  # alarms below the assets, counters beside them
+    assert max(end for _, end in rows.values()) <= 16
+
+
+def test_asset_view_names_the_asset_and_offers_a_way_back(cfg):
+    d = bd.build(DEFAULTS, cfg.telemetry)
+    [header] = widgets_of(d, "system.cards.markdown_card")
+    assert "${entityName}" in header["config"]["settings"]["markdownTextPattern"]
+    [back] = header["config"]["actions"]["headerButton"]
+    assert (back["type"], back["targetDashboardStateId"]) == ("openDashboardState", "default")
+    charts = widgets_of(d, "system.time_series_chart")
+    assert len(charts) == len(cfg.telemetry.channels) and all(c["config"]["title"].startswith("${entityName}: ") for c in charts)
+    assert header["id"] in d["configuration"]["states"]["asset"]["layouts"]["main"]["widgets"]
