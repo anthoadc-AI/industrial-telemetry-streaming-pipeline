@@ -443,3 +443,202 @@ def test_ensure_device(json_log, device, credentials, event):
     if event == "device_token_updated":
         posted = next(c[2] for c in tb.calls if c[1] == "/api/device/credentials")
         assert posted["credentialsId"] == "TOKEN"
+
+
+# --- alarm reconciliation ---------------------------------------------------------------------------------
+
+
+class Msg:
+    def __init__(self, partition, offset, key, value, error=None):
+        self._p, self._o, self._k, self._v, self._e = partition, offset, key, value, error
+
+    def partition(self):
+        return self._p
+
+    def offset(self):
+        return self._o
+
+    def key(self):
+        return self._k
+
+    def value(self):
+        return self._v
+
+    def error(self):
+        return self._e
+
+
+class FakeConsumer:
+    """A compacted topic as {partition: [(offset, key, value)]}; poll returns them partition by partition."""
+
+    def __init__(self, partitions, idle_polls=1):
+        self.partitions = partitions
+        self.queue = [None] * idle_polls + [Msg(p, o, k, v) for p, recs in partitions.items() for o, k, v in recs]
+        self.assigned = None
+
+    def list_topics(self, topic, timeout):
+        meta = type("T", (), {"error": None, "partitions": dict.fromkeys(self.partitions)})
+        return type("M", (), {"topics": {"telemetry.alarms": meta}})
+
+    def get_watermark_offsets(self, tp, timeout):
+        recs = self.partitions[tp.partition]
+        return (recs[0][0], recs[-1][0] + 1) if recs else (0, 0)
+
+    def assign(self, tps):
+        self.assigned = sorted(tp.partition for tp in tps)
+
+    def poll(self, timeout):
+        return self.queue.pop(0) if self.queue else None
+
+
+def decode(value):
+    if value == b"bad":
+        raise ValueError("not avro")
+    return {"state": value.decode()}
+
+
+def test_read_alarm_topic_reads_every_partition_to_its_end_offset(json_log):
+    consumer = FakeConsumer({
+        0: [(0, b"pump-01/v/WARNING/1", b"RAISED"), (4, b"pump-01/v/WARNING/1", b"CLEARED")],  # offsets with gaps
+        1: [],
+        2: [(7, b"fan-01/v/WARNING/2", None), (8, b"motor-01/v/CRITICAL/3", b"bad"), (9, None, b"RAISED")],
+    })
+    records = irc.read_alarm_topic(consumer, "telemetry.alarms", decode)
+    assert consumer.assigned == [0, 2]  # empty partitions are not read
+    assert records == [("pump-01/v/WARNING/1", "RAISED"), ("pump-01/v/WARNING/1", "CLEARED"),
+                       ("fan-01/v/WARNING/2", None), ("motor-01/v/CRITICAL/3", irc.UNKNOWN)]
+    assert [e["event"] for e in json_log()] == ["alarm_record_undecodable"]
+
+
+def test_read_alarm_topic_failures():
+    with pytest.raises(irc.ImportFailed, match="not found"):
+        irc.read_alarm_topic(FakeConsumer({}), "telemetry.other", decode)
+    consumer = FakeConsumer({0: [(0, b"k", b"RAISED")]}, idle_polls=0)
+    consumer.queue = [Msg(0, 0, None, None, error="broker down")]
+    with pytest.raises(irc.ImportFailed, match="broker down"):
+        irc.read_alarm_topic(consumer, "telemetry.alarms", decode)
+    consumer = FakeConsumer({0: [(0, b"k", b"RAISED")]})
+    consumer.queue = []
+    with pytest.raises(irc.ImportFailed, match="end offsets not reached"):
+        irc.read_alarm_topic(consumer, "telemetry.alarms", decode, timeout=-1)
+
+
+def test_latest_alarm_states_keeps_the_last_event_and_drops_tombstoned_ids():
+    states = irc.latest_alarm_states([("a", "RAISED"), ("b", "RAISED"), ("a", "CLEARED"), ("b", None), ("c", "RAISED")])
+    assert states == {"a": "CLEARED", "c": "RAISED"}
+
+
+class ReconcileThingsBoard(irc.ThingsBoard):
+    """Devices by type, their alarms and their alarm_last attribute, in memory; every call recorded."""
+
+    def __init__(self, devices, page_size=100):
+        super().__init__("http://fake")
+        self.devices = devices  # name -> {"type", "alarms": [...], "alarm_last": dict | None}
+        self.page_size = page_size
+        self.calls = []
+
+    def _page(self, items, query):
+        start = query["page"] * self.page_size
+        return {"data": items[start:start + self.page_size], "hasNext": start + self.page_size < len(items)}
+
+    def _alarm(self, alarm_id):
+        return next(a for d in self.devices.values() for a in d["alarms"] if a["id"]["id"] == alarm_id)
+
+    def request(self, method, path, body=None, query=None, allow_404=False):
+        self.calls.append((method, path, body, query))
+        if path == "/api/tenant/devices":
+            return self._page([{"name": n, "id": {"id": f"id-{n}"}} for n, d in self.devices.items()
+                               if d["type"] == query["type"]], query)
+        device = next((d for n, d in self.devices.items() if path.split("/")[-1] == f"id-{n}"
+                       or f"/id-{n}/" in path), None)
+        if path.startswith("/api/alarm/DEVICE/"):
+            return self._page([a for a in device["alarms"] if a["status"].startswith("ACTIVE")], query)
+        if method == "POST" and path == "/api/alarm":
+            self._alarm(body["id"]["id"])["details"] = body["details"]
+            return None
+        if method == "POST" and path.endswith("/clear"):
+            alarm = self._alarm(path.split("/")[-2])
+            alarm["status"] = alarm["status"].replace("ACTIVE", "CLEARED")
+            return None
+        if path.endswith("/values/attributes/SERVER_SCOPE"):
+            last = device["alarm_last"]
+            return [] if last is None else [{"key": "alarm_last", "value": json.dumps(last), "lastUpdateTs": 1}]
+        if method == "POST" and path.endswith("/attributes/SERVER_SCOPE"):
+            device["alarm_last"] = json.loads(body["alarm_last"])
+            return None
+        raise AssertionError(f"unexpected call {method} {path}")
+
+
+def tb_alarm(n, alarm_id=None, type_="Vibration RMS high (warning)", status="ACTIVE_UNACK"):
+    return {"id": {"id": f"alarm-{n}"}, "type": type_, "status": status, "startTs": 1,
+            "details": {"alarm_id": alarm_id, "channel": "vibration_rms_mm_s"} if alarm_id else {}}
+
+
+def entry(alarm_id, state):
+    return {"alarm_id": alarm_id, "state": state, "raised_ts": int(alarm_id.rsplit("/", 1)[1])}
+
+
+GHOST = "pump-01/vibration_rms_mm_s/WARNING/100"
+LIVE = "pump-01/vibration_rms_mm_s/CRITICAL/200"
+PENDING = "pump-02/vibration_rms_mm_s/WARNING/300"
+WARNING_TYPE, CRITICAL_TYPE = "Vibration RMS high (warning)", "Vibration RMS high (critical)"
+
+
+def reconcile_fixture():
+    return ReconcileThingsBoard({
+        "pump-01": {"type": "pump", "alarm_last": {WARNING_TYPE: entry(GHOST, "RAISED"), CRITICAL_TYPE: entry(LIVE, "RAISED")},
+                    "alarms": [tb_alarm(1, GHOST), tb_alarm(2, LIVE, CRITICAL_TYPE), tb_alarm(3),
+                               tb_alarm(4, "pump-01/vibration_rms_mm_s/WARNING/50", status="CLEARED_ACK")]},
+        "pump-02": {"type": "pump", "alarm_last": {WARNING_TYPE: entry(PENDING, "RAISED")}, "alarms": [tb_alarm(5, PENDING)]},
+        "motor-01": {"type": "motor", "alarm_last": None, "alarms": []},
+        "fan-01": {"type": "fan", "alarm_last": {"x": entry("fan-01/v/WARNING/1", "RAISED")},
+                   "alarms": [tb_alarm(6, "fan-01/v/WARNING/1")]},  # not a configured asset type
+    }, page_size=1)
+
+
+def test_reconcile_clears_only_pipeline_alarms_not_active_in_the_topic(json_log):
+    tb = reconcile_fixture()
+    totals = irc.reconcile_alarms(tb, ["motor", "pump"], {LIVE: "RAISED", PENDING: "CLEARED"}, "telemetry.alarms")
+    assert totals == {"devices": 3, "alarms_cleared": 2, "alarm_last_entries_cleared": 2}
+    status = {a["id"]["id"]: a["status"] for d in tb.devices.values() for a in d["alarms"]}
+    assert status == {"alarm-1": "CLEARED_UNACK",  # the ghost
+                      "alarm-2": "ACTIVE_UNACK",  # active in the topic: kept
+                      "alarm-3": "ACTIVE_UNACK",  # no alarm_id: not raised by the pipeline
+                      "alarm-4": "CLEARED_ACK", "alarm-5": "CLEARED_UNACK",
+                      "alarm-6": "ACTIVE_UNACK"}  # fan: not a configured asset type
+    assert tb.devices["pump-01"]["alarms"][0]["details"] == {
+        "alarm_id": GHOST, "channel": "vibration_rms_mm_s", "cleared_by": "reconciliation",
+        "reconciliation_reason": "not in telemetry.alarms: Kafka starts empty at make up, its CLEARED event was lost"}
+    assert tb.devices["pump-02"]["alarms"][0]["details"]["reconciliation_reason"] == \
+        "CLEARED in telemetry.alarms, not yet applied by the sink"
+    # alarm_last: a reconciled entry becomes CLEARED with its alarm_id and raised_ts; the live one is kept.
+    assert tb.devices["pump-01"]["alarm_last"] == {WARNING_TYPE: entry(GHOST, "CLEARED"), CRITICAL_TYPE: entry(LIVE, "RAISED")}
+    assert tb.devices["pump-02"]["alarm_last"] == {WARNING_TYPE: entry(PENDING, "CLEARED")}
+    assert tb.devices["fan-01"]["alarm_last"]["x"]["state"] == "RAISED"
+    events = json_log()
+    assert [{k: e[k] for k in ("asset", "type", "alarm_id", "thingsboard_alarm_id")}
+            for e in events if e["event"] == "alarm_reconciled"] == [
+        {"asset": "pump-01", "type": WARNING_TYPE, "alarm_id": GHOST, "thingsboard_alarm_id": "alarm-1"},
+        {"asset": "pump-02", "type": WARNING_TYPE, "alarm_id": PENDING, "thingsboard_alarm_id": "alarm-5"}]
+    assert all(e["reason"] for e in events if e["event"] == "alarm_reconciled")
+    assert [e["alarm_id"] for e in events if e["event"] == "alarm_last_reconciled"] == [GHOST, PENDING]
+    done = [e for e in events if e["event"] == "alarm_reconciliation_done"]
+    assert len(done) == 1 and (done[0]["alarms_cleared"], done[0]["alarms_active_in_topic"]) == (2, 1)
+
+
+def test_reconcile_is_idempotent_and_reports_a_zero_total(json_log):
+    tb = reconcile_fixture()
+    irc.reconcile_alarms(tb, ["motor", "pump"], {}, "telemetry.alarms")
+    writes = len([c for c in tb.calls if c[0] == "POST"])
+    totals = irc.reconcile_alarms(tb, ["motor", "pump"], {}, "telemetry.alarms")
+    assert totals == {"devices": 3, "alarms_cleared": 0, "alarm_last_entries_cleared": 0}
+    assert len([c for c in tb.calls if c[0] == "POST"]) == writes  # the second run writes nothing
+    done = [e for e in json_log() if e["event"] == "alarm_reconciliation_done"]
+    assert [d["alarms_cleared"] for d in done] == [3, 0]  # the summary is logged also when the total is 0
+
+
+def test_an_alarm_whose_latest_record_is_undecodable_is_kept():
+    tb = reconcile_fixture()
+    irc.reconcile_alarms(tb, ["pump"], {GHOST: irc.UNKNOWN, LIVE: "RAISED", PENDING: "RAISED"}, "telemetry.alarms")
+    assert [a["status"] for a in tb.devices["pump-01"]["alarms"][:2]] == ["ACTIVE_UNACK", "ACTIVE_UNACK"]
+    assert tb.devices["pump-01"]["alarm_last"][WARNING_TYPE]["state"] == "RAISED"
