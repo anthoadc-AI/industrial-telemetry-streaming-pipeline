@@ -22,6 +22,7 @@ include = [
     "scripts/check_secrets.py",
     "scripts/clean.py",
     "scripts/thingsboard/*.py",
+    "processing/thingsboard_sink/*.py",
 ]
 
 [tool.coverage.report]
