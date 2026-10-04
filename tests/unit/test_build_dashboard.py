@@ -90,6 +90,14 @@ def test_alarm_table_cannot_clear_and_shows_the_event_time(cfg):
     assert (widths["type"], widths["status"]) == ("240px", "190px")  # the longest type and status on one line
 
 
+def test_charts_default_to_the_last_ten_minutes(cfg):
+    """Owner decision: 10 minutes by default, the toolbar's time selector kept to widen it."""
+    c = bd.build(DEFAULTS, cfg.telemetry)["configuration"]
+    assert c["timewindow"]["realtime"]["timewindowMs"] == 600_000 and c["settings"]["showDashboardTimewindow"] is True
+    charts = widgets_of({"configuration": c}, "system.time_series_chart")
+    assert charts and all(w["config"]["useDashboardTimewindow"] for w in charts)
+
+
 def test_plant_view_fits_one_screen_and_shows_every_asset(cfg):
     d = bd.build(DEFAULTS, cfg.telemetry)
     main = d["configuration"]["states"]["default"]["layouts"]["main"]

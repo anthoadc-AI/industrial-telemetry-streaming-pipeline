@@ -170,8 +170,12 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
             },
             "entityAliases": aliases,
             "filters": {},
+            # Charts: the last 10 minutes by default (owner, Task 3.2), the length of a review or demonstration run,
+            # so the window is full; the time selector in the toolbar widens it. The alarms table keeps its own window.
+            # A line chart joins the points on both sides of a period without data: the widget has no setting to
+            # break the line there (Task 3.2 backlog).
             "timewindow": {"displayValue": "", "selectedTab": 0,
-                           "realtime": {"realtimeType": 0, "interval": 5000, "timewindowMs": 1800000},
+                           "realtime": {"realtimeType": 0, "interval": 5000, "timewindowMs": 600_000},
                            "aggregation": {"type": "NONE", "limit": 50000}},
             # No dashboard title: the toolbar's state breadcrumb already names the view, and the height is the table's.
             "settings": {"stateControllerId": "entity", "showTitle": False, "showDashboardsSelect": False,
