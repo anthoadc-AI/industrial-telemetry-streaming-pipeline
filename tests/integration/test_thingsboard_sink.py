@@ -215,6 +215,12 @@ def test_alarm_ordering_and_replay_leave_exactly_one_alarm_per_alarm_id(stack, t
     # First pass, then a replay: two new groups, both starting at this test's mark on telemetry.alarms and at
     # the current end of telemetry.raw, so each forwards exactly the records produced above.
     marks = {"telemetry.alarms": offsets_mark["telemetry.alarms"], "telemetry.raw": it.watermarks("telemetry.raw")}
+    pump = device(tb, "pump-02")
+
+    def all_cleared():
+        found = alarms_of(tb, pump["id"]["id"], ids)
+        return len(found) == len(ids) and not any(a["status"].startswith("ACTIVE") for a in found)
+
     for name in ("first", "replay"):
         g = sink_group_at(marks, f"it-sink-{name}")
         sink = it.thingsboard_sink(log_dir, f"sink-{name}", g, count=len(events) + 1)
@@ -222,17 +228,13 @@ def test_alarm_ordering_and_replay_leave_exactly_one_alarm_per_alarm_id(stack, t
         summary = sink.find("run_finished")[0]
         assert summary["alarm_events_forwarded"] == len(events) and summary["tombstones_skipped"] == 1
         assert summary.get("dead_lettered", 0) == 0
-
-    pump = device(tb, "pump-02")
-    def all_cleared():
-        found = alarms_of(tb, pump["id"]["id"], ids)
-        return len(found) == len(ids) and not any(a["status"].startswith("ACTIVE") for a in found)
-
-    settled = wait_until(all_cleared, timeout=120)
-    alarms = alarms_of(tb, pump["id"]["id"], ids)
-    active = sum(a["status"].startswith("ACTIVE") for a in alarms)
-    assert settled, f"{len(alarms)} alarms for {len(ids)} alarm_ids, {active} active"
-    assert sorted(a["details"]["alarm_id"] for a in alarms) == sorted(ids)  # exactly one per alarm_id
+        # Checked after each pass, the first included: a replay must not hide what the first pass lost (Task 3.2
+        # fix: before PipelineSequential, the replay made up for 236 messages ThingsBoard had dropped).
+        settled = wait_until(all_cleared, timeout=120)
+        alarms = alarms_of(tb, pump["id"]["id"], ids)
+        active = sum(a["status"].startswith("ACTIVE") for a in alarms)
+        assert settled, f"after the {name} pass: {len(alarms)} alarms for {len(ids)} alarm_ids, {active} active"
+        assert sorted(a["details"]["alarm_id"] for a in alarms) == sorted(ids)  # exactly one per alarm_id
     attr = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{pump['id']['id']}/values/attributes/SERVER_SCOPE",
                       query={"keys": "alarm_last"})
     last = json.loads(attr[0]["value"])
