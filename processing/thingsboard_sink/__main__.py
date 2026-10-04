@@ -25,6 +25,16 @@ device profile the import script created for that type.
   integration tests' roll markers) is skipped and counted, never failed or
   dead-lettered.
 
+Pace: at most config/thingsboard.yaml's sink.max_messages_per_s_per_asset
+messages per second for one asset (a token bucket per asset holding one
+second of messages). ThingsBoard processes an asset's messages one at a time
+(PipelineSequential queue), so a backlog sent at full speed (after a
+ThingsBoard outage) would pile up in one batch for one device; paced below
+the measured capacity, a batch holds a message or two. The sink waits before
+publishing an asset's message that has no token; it handles one record at a
+time, so meanwhile it reads nothing else either: after an outage, new alarms
+wait behind the backlog.
+
 Delivery: at-least-once to ThingsBoard's MQTT transport. A record's offset is
 stored for commit only after ThingsBoard has acknowledged its publish (QoS 1
 PUBACK). That acknowledgement means the transport accepted the message onto
@@ -89,6 +99,34 @@ SOURCE = "thingsboard_sink"
 
 class Transient(Exception):
     """A failure worth retrying: the record is not committed past."""
+
+
+class Stopping(Exception):
+    """A stop requested while waiting for the rate limit: the record is not committed past."""
+
+
+class AssetRateLimiter:
+    """A token bucket per asset: `rate` messages per second, at most one second of messages (max(1, rate)) at once.
+
+    delay(asset) takes a token and returns how long to wait before sending, 0 when one is there. A token taken
+    in advance (the wait) is paid back as time passes, so a caller that waits the returned time keeps the rate.
+    The clock is injected; time.monotonic in use.
+    """
+
+    def __init__(self, rate: float, clock=time.monotonic):
+        if rate <= 0:
+            raise ValueError("rate must be > 0")
+        self.rate = rate
+        self.burst = max(1.0, rate)
+        self.clock = clock
+        self.buckets: dict[str, tuple[float, float]] = {}  # asset -> (tokens, at)
+
+    def delay(self, asset: str) -> float:
+        now = self.clock()
+        tokens, at = self.buckets.get(asset, (self.burst, now))
+        tokens = min(self.burst, tokens + (now - at) * self.rate) - 1
+        self.buckets[asset] = (tokens, now)
+        return 0.0 if tokens >= 0 else -tokens / self.rate
 
 
 # --- mapping (pure) -----------------------------------------------------------------------
@@ -234,6 +272,8 @@ class Sink:
         self.channels = list(cfg.telemetry.channels)
         self.labels = {name: channel.label for name, channel in cfg.telemetry.channels.items()}
         self.asset_types = {a.id: a.type for a in cfg.telemetry.assets}
+        self.limiter = AssetRateLimiter(cfg.thingsboard.sink_max_messages_per_s_per_asset)
+        self.wait = threading.Event().wait  # replaced by run()'s stop event, so a stop interrupts the wait
         self.token = token if token is not None else os.environ.get("TB_GATEWAY_TOKEN", "")
         self.counts: Counter = Counter()
         self.consumer = None
@@ -305,12 +345,24 @@ class Sink:
             return
         if topic == self.raw_topic:
             device, device_type, entry = telemetry_entry(record, self.channels)
+            self.pace(device)
             self.gateway.send(device, device_type, entry)
             self.counts["telemetry_forwarded"] += 1
         else:
             device, entry = alarm_entry(record, self.labels)
+            self.pace(device)
             self.gateway.send(device, self.asset_types.get(device), entry)
             self.counts["alarm_events_forwarded"] += 1
+
+    def pace(self, asset: str) -> None:
+        """Wait for the asset's rate limit; a stop during the wait raises Stopping."""
+        delay = self.limiter.delay(asset)
+        if delay <= 0:
+            return
+        self.counts["rate_limited"] += 1
+        self.counts["rate_limited_ms"] += round(delay * 1000)
+        if self.wait(delay):
+            raise Stopping()
 
     def undecodable(self, msg, detail: str) -> None:
         if msg.topic() == self.raw_topic:  # the alarm consumer dead-letters these
@@ -335,6 +387,7 @@ class Sink:
     # the loop -------------------------------------------------------------------------------
 
     def run(self, stop: threading.Event) -> str:
+        self.wait = stop.wait
         start = time.monotonic()
         handled = 0
         while True:
@@ -355,6 +408,8 @@ class Sink:
                 try:
                     self.handle(msg)
                     break
+                except Stopping:
+                    return "signal"  # not stored: read again on the next start
                 except Transient as e:
                     self.counts["retries"] += 1
                     log.warning("forward_retry", extra={"topic": msg.topic(), "partition": msg.partition(),
