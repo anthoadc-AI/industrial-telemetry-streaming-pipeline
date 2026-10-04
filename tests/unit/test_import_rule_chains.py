@@ -111,12 +111,32 @@ def test_every_connection_is_valid_after_pruning():
         assert all(0 <= c["fromIndex"] < n and 0 <= c["toIndex"] < n for c in md["connections"])
 
 
+def test_every_alarm_mapping_failure_is_recorded_on_the_gateway_and_ends_the_message():
+    """Owner decision (Task 3.2 fix): a node that fails sends the message to its Failure branch, which records
+    alarm_mapping_failed on the pipeline gateway (server time) and ends normally, so the queue never retries a
+    message that would always fail and the asset's next messages are not held back. Debug: failures only."""
+    md = json.loads((irc.RULE_CHAIN_DIR / "alarm-mapping.json").read_text(encoding="utf-8"))["metadata"]
+    names = [n["name"] for n in md["nodes"]]
+    describe, to_gateway, save = (names.index(n) for n in ("Describe mapping failure", "To the pipeline gateway",
+                                                            "Save mapping failure"))
+    failures = {c["fromIndex"]: c["toIndex"] for c in md["connections"] if c["type"] == "Failure"}
+    assert failures == {i: describe for i in range(describe)}  # every mapping node, nothing else
+    tail = {(c["fromIndex"], c["toIndex"]) for c in md["connections"] if c["type"] == "Success" and c["fromIndex"] >= describe}
+    assert tail == {(describe, to_gateway), (to_gateway, save)}
+    gw = md["nodes"][to_gateway]["configuration"]
+    assert (gw["originatorSource"], gw["entityType"], gw["entityNamePattern"]) == ("ENTITY", "DEVICE", irc.PIPELINE_GATEWAY)
+    assert md["nodes"][save]["configuration"]["useServerTs"] is True  # two failures of one event never overwrite
+    assert "alarm_mapping_failed" in md["nodes"][describe]["configuration"]["tbelScript"]
+    assert all(n["debugSettings"] == {"failuresEnabled": True, "allEnabled": False, "allEnabledUntil": 0} for n in md["nodes"])
+
+
 def test_alarm_mapping_evaluates_no_threshold():
     """One alarm engine (Task 3.2): AlarmMapping only maps and deduplicates; its nodes are the expected ones."""
     md = json.loads((irc.RULE_CHAIN_DIR / "alarm-mapping.json").read_text(encoding="utf-8"))["metadata"]
     kinds = [n["type"].rsplit(".", 1)[1] for n in md["nodes"]]
     assert kinds == ["TbGetAttributesNode", "TbTransformMsgNode", "TbJsSwitchNode", "TbCreateAlarmNode",
-                     "TbClearAlarmNode", "TbTransformMsgNode", "TbMsgAttributesNode"]
+                     "TbClearAlarmNode", "TbTransformMsgNode", "TbMsgAttributesNode",
+                     "TbTransformMsgNode", "TbChangeOriginatorNode", "TbMsgTimeseriesNode"]
     scripts = " ".join(str(n["configuration"].get("tbelScript", "")) for n in md["nodes"])
     for channel in ("bearing_temperature_c", "vibration_rms_mm_s", "motor_current_a", "speed_rpm", "temperature"):
         assert f"msg.{channel}" not in scripts

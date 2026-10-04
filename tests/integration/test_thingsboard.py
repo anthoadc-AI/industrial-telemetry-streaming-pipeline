@@ -52,7 +52,7 @@ def test_rule_chains_imported_and_linked(stack):
         refs[name] = sorted(by_id.get(n["configuration"]["ruleChainId"], "UNRESOLVED")
                             for n in md["nodes"] if n["type"].endswith("TbRuleChainInputNode"))
         rest += sum(n["type"].endswith("TbRestApiCallNode") for n in md["nodes"])
-    assert counts == {"AlarmMapping": (7, 9), "Root Rule Chain": (8, 7)}
+    assert counts == {"AlarmMapping": (10, 18), "Root Rule Chain": (8, 7)}
     assert refs == {"AlarmMapping": [], "Root Rule Chain": ["AlarmMapping"]}
     assert rest == 0
 
