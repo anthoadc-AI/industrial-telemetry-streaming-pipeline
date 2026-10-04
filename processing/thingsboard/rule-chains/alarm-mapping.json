@@ -1,0 +1,206 @@
+{
+  "ruleChain": {
+    "name": "AlarmMapping",
+    "type": "CORE",
+    "firstRuleNodeId": null,
+    "root": false,
+    "debugMode": false,
+    "configuration": null,
+    "additionalInfo": {
+      "description": "Maps alarm lifecycle events from the ThingsBoard sink to ThingsBoard alarms. No thresholds: the alarm consumer is the only alarm engine."
+    }
+  },
+  "metadata": {
+    "version": 1,
+    "firstNodeIndex": 0,
+    "nodes": [
+      {
+        "type": "org.thingsboard.rule.engine.metadata.TbGetAttributesNode",
+        "name": "Last alarm events",
+        "debugSettings": null,
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 1,
+        "configuration": {
+          "fetchTo": "METADATA",
+          "clientAttributeNames": [],
+          "sharedAttributeNames": [],
+          "serverAttributeNames": [
+            "alarm_last"
+          ],
+          "latestTsKeyNames": [],
+          "tellFailureIfAbsent": false,
+          "getLatestValueWithTs": false
+        },
+        "additionalInfo": {
+          "layoutX": 300,
+          "layoutY": 150
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.transform.TbTransformMsgNode",
+        "name": "Decide",
+        "debugSettings": null,
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 0,
+        "configuration": {
+          "scriptLang": "TBEL",
+          "tbelScript": "// AlarmMapping: alarm lifecycle events from the ThingsBoard sink -> ThingsBoard alarms.\n// No threshold is evaluated here: the alarm consumer decided RAISED or CLEARED.\n// The sink sends one telemetry key per alarm type, alarm_<channel>_<severity>, whose\n// value is the event as JSON: alarm_id, state, severity, channel, value, threshold, raised_ts, type.\nvar key = null;\nforeach (k : msg.keySet()) {\n    if (k.startsWith(\"alarm_\")) {\n        key = k;\n    }\n}\nif (key == null) {\n    metadata.alarmAction = \"NONE\";\n    return {msg: msg, metadata: metadata, msgType: msgType};\n}\nvar ev = JSON.parse(msg[key]);\n// The alarm type, \"<channel label> high (warning|critical)\", is set by the sink from config/telemetry.yaml.\nvar type = ev.type;\n// Last event applied per alarm type on this device (server attribute alarm_last).\nvar last = {};\nif (metadata.ss_alarm_last != null) {\n    last = JSON.parse(metadata.ss_alarm_last);\n}\nvar prev = last[type];\n// Apply an event only if it belongs to a newer alarm than the last one applied for\n// this type, or if it is the CLEARED of that same alarm. Anything else is a replay\n// (at-least-once delivery, or a re-read of the compacted topic) and is dropped.\nvar apply = false;\nif (prev == null) {\n    apply = true;\n} else if (ev.raised_ts > prev.raised_ts) {\n    apply = true;\n} else if (ev.raised_ts == prev.raised_ts && prev.state == \"RAISED\" && ev.state == \"CLEARED\") {\n    apply = true;\n}\nif (apply) {\n    last[type] = {alarm_id: ev.alarm_id, state: ev.state, raised_ts: ev.raised_ts};\n    metadata.alarmAction = ev.state;\n} else {\n    metadata.alarmAction = \"DUPLICATE\";\n}\nmetadata.alarmType = type;\nmetadata.alarmSeverity = ev.severity;\nmetadata.newAlarmLast = JSON.stringify(last);\nreturn {msg: ev, metadata: metadata, msgType: msgType};\n",
+          "jsScript": "return {msg: msg, metadata: metadata, msgType: msgType};"
+        },
+        "additionalInfo": {
+          "layoutX": 550,
+          "layoutY": 150
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.filter.TbJsSwitchNode",
+        "name": "Route",
+        "debugSettings": null,
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 0,
+        "configuration": {
+          "scriptLang": "TBEL",
+          "tbelScript": "return [metadata.alarmAction];",
+          "jsScript": "return [metadata.alarmAction];"
+        },
+        "additionalInfo": {
+          "layoutX": 800,
+          "layoutY": 150
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.action.TbCreateAlarmNode",
+        "name": "Create alarm",
+        "debugSettings": null,
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 0,
+        "configuration": {
+          "alarmType": "${alarmType}",
+          "scriptLang": "TBEL",
+          "alarmDetailsBuildTbel": "var details = {\n    alarm_id: msg.alarm_id, channel: msg.channel, value: msg.value,\n    threshold: msg.threshold, raised_ts: msg.raised_ts\n};\nreturn details;\n",
+          "alarmDetailsBuildJs": "return {};",
+          "severity": "${alarmSeverity}",
+          "dynamicSeverity": true,
+          "propagate": false,
+          "propagateToOwner": false,
+          "propagateToTenant": false,
+          "relationTypes": [],
+          "useMessageAlarmData": false,
+          "overwriteAlarmDetails": true
+        },
+        "additionalInfo": {
+          "layoutX": 1050,
+          "layoutY": 50
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.action.TbClearAlarmNode",
+        "name": "Clear alarm",
+        "debugSettings": null,
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 0,
+        "configuration": {
+          "alarmType": "${alarmType}",
+          "scriptLang": "TBEL",
+          "alarmDetailsBuildTbel": "var details = {\n    alarm_id: msg.alarm_id, channel: msg.channel, value: msg.value,\n    threshold: msg.threshold, raised_ts: msg.raised_ts\n};\nreturn details;\n",
+          "alarmDetailsBuildJs": "return {};"
+        },
+        "additionalInfo": {
+          "layoutX": 1050,
+          "layoutY": 250
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.transform.TbTransformMsgNode",
+        "name": "Keep last events",
+        "debugSettings": null,
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 0,
+        "configuration": {
+          "scriptLang": "TBEL",
+          "tbelScript": "return {msg: {alarm_last: metadata.newAlarmLast}, metadata: metadata, msgType: \"POST_ATTRIBUTES_REQUEST\"};\n",
+          "jsScript": "return {msg: msg, metadata: metadata, msgType: msgType};"
+        },
+        "additionalInfo": {
+          "layoutX": 1300,
+          "layoutY": 150
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.telemetry.TbMsgAttributesNode",
+        "name": "Save alarm_last",
+        "debugSettings": null,
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 3,
+        "configuration": {
+          "processingSettings": {
+            "type": "ON_EVERY_MESSAGE"
+          },
+          "scope": "SERVER_SCOPE",
+          "notifyDevice": false,
+          "sendAttributesUpdatedNotification": false,
+          "updateAttributesOnlyOnValueChange": false
+        },
+        "additionalInfo": {
+          "layoutX": 1550,
+          "layoutY": 150
+        }
+      }
+    ],
+    "connections": [
+      {
+        "fromIndex": 0,
+        "toIndex": 1,
+        "type": "Success"
+      },
+      {
+        "fromIndex": 1,
+        "toIndex": 2,
+        "type": "Success"
+      },
+      {
+        "fromIndex": 2,
+        "toIndex": 3,
+        "type": "RAISED"
+      },
+      {
+        "fromIndex": 2,
+        "toIndex": 4,
+        "type": "CLEARED"
+      },
+      {
+        "fromIndex": 3,
+        "toIndex": 5,
+        "type": "Created"
+      },
+      {
+        "fromIndex": 3,
+        "toIndex": 5,
+        "type": "Updated"
+      },
+      {
+        "fromIndex": 4,
+        "toIndex": 5,
+        "type": "Cleared"
+      },
+      {
+        "fromIndex": 4,
+        "toIndex": 5,
+        "type": "False"
+      },
+      {
+        "fromIndex": 5,
+        "toIndex": 6,
+        "type": "Success"
+      }
+    ],
+    "ruleChainConnections": null
+  }
+}

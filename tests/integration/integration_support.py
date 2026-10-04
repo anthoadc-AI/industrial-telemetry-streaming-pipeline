@@ -169,6 +169,21 @@ def alarm_consumer(log_dir: Path, name: str, group: str, count: int | None = Non
     return p
 
 
+def thingsboard_sink(log_dir: Path, name: str, group: str, duration: float = 180, count: int | None = None) -> Proc:
+    """The ThingsBoard sink in its own consumer group.
+
+    The sink reads TB_GATEWAY_TOKEN from the environment only (no .env lookup, so it runs unchanged in a
+    container); `make test-integration-full` exports .env into the environment.
+    """
+    cmd = [PY, "-m", "processing.thingsboard_sink", "--group-id", group, "--duration", str(duration),
+           "--client-id", unique("it-sink")]
+    if count is not None:
+        cmd += ["--count", str(count)]
+    p = Proc(name, cmd, log_dir)
+    p.wait_for("run_started", 60)
+    return p
+
+
 def run_module(*args: str, timeout: float = 180) -> subprocess.CompletedProcess:
     return subprocess.run([PY, *args], cwd=REPO_ROOT, env=ENV, capture_output=True, text=True, timeout=timeout)
 
@@ -286,6 +301,31 @@ def is_roll_marker(record: dict) -> bool:
     return record["key"] is not None and record["key"].decode().startswith("it-roll-marker/")
 
 
+def murmur2(data: bytes) -> int:
+    """Kafka's Java murmur2, signed 32-bit, as kafkajs's DefaultPartitioner and the Java client compute it."""
+    length, m = len(data), 0x5BD1E995
+    h = (0x9747B28C ^ length) & 0xFFFFFFFF
+    for i in range(length // 4):
+        k = (int.from_bytes(data[i * 4:i * 4 + 4], "little") * m) & 0xFFFFFFFF
+        k = ((k ^ (k >> 24)) * m) & 0xFFFFFFFF
+        h = ((h * m) & 0xFFFFFFFF) ^ k
+    tail = data[length - length % 4:]
+    if len(tail) == 3:
+        h ^= tail[2] << 16
+    if len(tail) >= 2:
+        h ^= tail[1] << 8
+    if len(tail) >= 1:
+        h = ((h ^ tail[0]) * m) & 0xFFFFFFFF
+    h = ((h ^ (h >> 13)) * m) & 0xFFFFFFFF
+    h ^= h >> 15
+    return h - (1 << 32) if h & 0x80000000 else h
+
+
+def asset_partition(asset_id: str, partitions: int = 3) -> int:
+    """The partition of telemetry.alarms the alarm consumer's AssetPartitioner gives an asset's records."""
+    return (murmur2(asset_id.encode()) & 0x7FFFFFFF) % partitions
+
+
 def produce_raw(topic: str, value: bytes | None, key: bytes | None = b"pump-01") -> None:
     p = Producer({"bootstrap.servers": BOOTSTRAP})
     p.produce(topic, key=key, value=value)
@@ -344,3 +384,42 @@ def framed(schema_id: int, schema: dict, record: dict) -> bytes:
 
 def telemetry_schema() -> dict:
     return json.loads((REPO_ROOT / "schemas" / "telemetry_v1.avsc").read_text(encoding="utf-8"))
+
+
+# --- ThingsBoard --------------------------------------------------------------------
+
+
+def import_script():
+    """scripts/thingsboard/import_rule_chains.py as a module: its REST client, settings and paging."""
+    import importlib.util
+
+    name = "import_rule_chains_support"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / "thingsboard" / "import_rule_chains.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def thingsboard():
+    irc = import_script()
+    tb = irc.ThingsBoard(f"http://localhost:{irc.setting('TB_HTTP_PORT', '8080')}")
+    tb.login(irc.setting("TB_TENANT_USERNAME"), irc.setting("TB_TENANT_PASSWORD"))
+    return tb
+
+
+def active_pipeline_alarms(tb) -> list[dict]:
+    """Active ThingsBoard alarms raised by the pipeline, in the scope of the import's reconciliation:
+    devices of the configured asset types, alarms whose details carry an alarm_id."""
+    from config.loader import load_config
+
+    irc = import_script()
+    found = []
+    for asset_type in sorted({a.type for a in load_config(env={}).telemetry.assets}):
+        for d in irc._pages(tb, "/api/tenant/devices", {"type": asset_type}):
+            for a in irc._pages(tb, f"/api/alarm/DEVICE/{d['id']['id']}", {"searchStatus": "ACTIVE"}):
+                if (a.get("details") or {}).get("alarm_id"):
+                    found.append({"asset": d["name"], "type": a["type"], "alarm_id": a["details"]["alarm_id"],
+                                  "status": a["status"]})
+    return found

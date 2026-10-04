@@ -129,6 +129,12 @@ services:
       - "${TB_MQTT_PORT:-9883}:1883"
     environment:
       TB_QUEUE_TYPE: in-memory
+      # Heap ceiling pinned (owner decision, Task 3.2). Unset, the JVM took a
+      # quarter of the VM's memory (MaxHeapSize 3.1 GB) and, with that much
+      # room, G1 let garbage accumulate: 0.83 GB used under the pipeline's load
+      # (50 msg/s through the sink), 157 MB live after a full GC. 1 GB is about
+      # six times the live set and above the observed working size.
+      JAVA_OPTS: "-Xmx1g"
     # Named volumes, never the coursework's ~/.mytb-data bind mount. On the
     # first start with an empty volume, the image installs its database with
     # demo data, which includes the tenant account used by the import script.

@@ -175,7 +175,7 @@
       },
       {
         "type": "org.thingsboard.rule.engine.flow.TbRuleChainInputNode",
-        "name": "CreateAndClearAlarm",
+        "name": "AlarmMapping",
         "debugSettings": {
           "failuresEnabled": false,
           "allEnabled": false,
@@ -186,7 +186,7 @@
         "configurationVersion": 1,
         "configuration": {
           "forwardMsgToDefaultRuleChain": false,
-          "ruleChainId": "${RULE_CHAIN_ID:CreateAndClearAlarms}"
+          "ruleChainId": "${RULE_CHAIN_ID:AlarmMapping}"
         },
         "additionalInfo": {
           "description": "",

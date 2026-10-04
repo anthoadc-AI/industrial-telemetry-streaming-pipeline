@@ -1,35 +1,56 @@
-"""Import the project rule chains into ThingsBoard and create the demo device.
+"""Set up ThingsBoard as the operations layer: rule chains, device profiles, gateway, dashboard.
 
     python scripts/thingsboard/import_rule_chains.py
 
-Reads processing/thingsboard/rule-chains/*.json, which hold two kinds of
-placeholder:
+Run by `make up` (full profile). Everything it writes is found by exact name
+and updated in place, so re-running never duplicates anything.
 
-- ``${FIREBASE_DB_URL}`` at the start of each Firebase REST node URL. When
-  FIREBASE_ENABLED=true it is replaced by FIREBASE_DB_URL. Otherwise the
-  Firebase leg is pruned before import (prune_firebase): the REST nodes and
-  their connections are removed, TempToFirebase and AlarmToFirebase, left
-  empty, are not imported, and the rule-chain input nodes that pointed to
-  them are removed too, so no node is left to fail on every message. Chains
-  left out are deleted from ThingsBoard if an earlier import created them,
-  by exact name, so the import is idempotent in both directions.
+Rule chains, from processing/thingsboard/rule-chains/*.json:
+- Root Rule Chain: saves telemetry, then hands every saved telemetry message
+  to AlarmMapping. Its "Firebase" REST node is the only Firebase sink kept
+  from the coursework (owner decision, Task 3.2), off by default.
+- AlarmMapping: turns the alarm lifecycle events the ThingsBoard sink sends
+  into ThingsBoard alarms. It evaluates no threshold: the Node.js alarm
+  consumer is the only alarm engine.
+- Retired (RETIRED_CHAINS): CreateAndClearAlarms, the course chain with its
+  own temperature threshold, and TempToFirebase and AlarmToFirebase, reached
+  only through it. They are no longer imported and are deleted, by exact
+  name, if an earlier import created them.
+Placeholders in the exports:
+- ``${FIREBASE_DB_URL}`` at the start of a Firebase REST node URL. With
+  FIREBASE_ENABLED=true it is replaced by FIREBASE_DB_URL; that path is
+  verified up to the URL written into ThingsBoard, never against a live
+  database. Otherwise the Firebase leg is pruned before import
+  (prune_firebase), so no node is left to fail on every message.
 - ``${RULE_CHAIN_ID:<name>}`` in each rule-chain input node, replaced by the
   id that the named chain has in this ThingsBoard instance.
 
-Steps: log in as the tenant, prune the Firebase leg when it is disabled,
-make sure every chain to import exists (matched by name), write each chain's
-nodes and connections with the placeholders resolved, delete the chains left
-out, set "Root Rule Chain" as the root chain, and make sure the demo device
-exists with the access token TB_ACCESS_TOKEN.
+Device profiles: one per asset type in config/telemetry.yaml, on the
+SequentialByOriginator queue. AlarmMapping reads and rewrites a device
+attribute per event; that queue hands ThingsBoard a device's next message
+only after the previous one has been fully processed, so those
+read-modify-write steps never interleave (verified in Task 3.2: with the
+default BURST queue the same events left wrong and duplicated alarms).
+The ThingsBoard sink's gateway creates each asset's device with its type, so
+the device gets its profile, and the queue, by name.
 
-Idempotent: chains and the device are found by name and updated in place, so
-re-running never duplicates them.
+Devices: the pipeline gateway (PIPELINE_GATEWAY, flagged as a gateway, token
+TB_GATEWAY_TOKEN) through which the sink publishes for every asset; and the
+coursework demo device (DEMO_DEVICE, token TB_ACCESS_TOKEN).
+
+Dashboard: processing/thingsboard/dashboards/operations.json, imported by
+title. It names no device: its aliases select devices by the asset types.
+
+Alarm reconciliation, last: every pipeline alarm active in ThingsBoard but not
+in telemetry.alarms is cleared, so no alarm outlives the Kafka it came from
+(see reconcile_alarms). It logs alarm_reconciled per alarm cleared and
+alarm_reconciliation_done with the totals, also when they are 0.
 
 Configuration comes from the environment, falling back to the repository's
 .env file for anything unset: TB_HOST, TB_HTTP_PORT, TB_TENANT_USERNAME,
-TB_TENANT_PASSWORD, TB_ACCESS_TOKEN, FIREBASE_ENABLED, FIREBASE_DB_URL.
-The script never prints the password, the session token or a rendered
-Firebase URL.
+TB_TENANT_PASSWORD, TB_ACCESS_TOKEN, TB_GATEWAY_TOKEN, FIREBASE_ENABLED,
+FIREBASE_DB_URL, KAFKA_BOOTSTRAP, SCHEMA_REGISTRY_URL. The script never prints the password, the session token,
+a device token or a rendered Firebase URL.
 """
 
 from __future__ import annotations
@@ -45,22 +66,28 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from confluent_kafka import OFFSET_BEGINNING, Consumer, KafkaException, TopicPartition
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from common import jsonlog  # noqa: E402
+from config.loader import load_config  # noqa: E402
 
 RULE_CHAIN_DIR = REPO_ROOT / "processing" / "thingsboard" / "rule-chains"
+DASHBOARD_FILE = REPO_ROOT / "processing" / "thingsboard" / "dashboards" / "operations.json"
 
 # Import order only matters for readability: all chains are created before
 # any metadata is written, so every reference can be resolved.
 CHAIN_FILES = [
-    "temp-to-firebase.json",
-    "alarm-to-firebase.json",
-    "create-and-clear-alarms.json",
+    "alarm-mapping.json",
     "root-rule-chain.json",
 ]
+# Chains earlier versions imported; deleted by exact name when present.
+RETIRED_CHAINS = ("CreateAndClearAlarms", "TempToFirebase", "AlarmToFirebase")
 ROOT_CHAIN = "Root Rule Chain"
 DEMO_DEVICE = "DHT11 Demo Device"
+PIPELINE_GATEWAY = "pipeline-gateway"
+ALARM_QUEUE = "SequentialByOriginator"
 FIREBASE_PLACEHOLDER = "${FIREBASE_DB_URL}"
 CHAIN_REF = re.compile(r"^\$\{RULE_CHAIN_ID:(.+)\}$")
 LOGIN_RETRY_S = 120
@@ -261,48 +288,246 @@ def import_chains(tb: ThingsBoard, firebase_url: str | None) -> dict[str, str]:
         log.info("rule_chain_written", extra={"rule_chain": name, "nodes": len(nodes),
                                               "connections": len(md.get("connections") or [])})
 
-    # Chains this import owns but left out (Firebase disabled) are deleted if
-    # an earlier import created them, matched by exact name only, and only
-    # now: the chains that referenced them have just been rewritten without
-    # those references.
-    for name in skipped:
+    # Chains this import owns but left out (Firebase disabled) or retired are
+    # deleted if an earlier import created them, matched by exact name only,
+    # and only now: the chains that referenced them have just been rewritten
+    # without those references.
+    reasons = {**{name: "retired" for name in RETIRED_CHAINS}, **{name: "FIREBASE_ENABLED is not true" for name in skipped}}
+    for name, reason in reasons.items():
+        if name in chain_ids:
+            continue
         existing = tb.find_rule_chain(name)
         if existing:
             tb.request("DELETE", f"/api/ruleChain/{existing['id']['id']}")
-            log.info("rule_chain_deleted", extra={"rule_chain": name, "id": existing["id"]["id"],
-                                                  "reason": "FIREBASE_ENABLED is not true"})
+            log.info("rule_chain_deleted", extra={"rule_chain": name, "id": existing["id"]["id"], "reason": reason})
 
     tb.request("POST", f"/api/ruleChain/{chain_ids[ROOT_CHAIN]}/root")
     log.info("rule_chain_set_root", extra={"rule_chain": ROOT_CHAIN})
     return chain_ids
 
 
-def ensure_device(tb: ThingsBoard, token: str) -> None:
-    device = tb.request("GET", "/api/tenant/devices", query={"deviceName": DEMO_DEVICE}, allow_404=True)
+def ensure_device(tb: ThingsBoard, token: str, name: str = DEMO_DEVICE, gateway: bool = False) -> None:
+    """The named device exists with this access token (and the gateway flag, for the pipeline gateway)."""
+    device = tb.request("GET", "/api/tenant/devices", query={"deviceName": name}, allow_404=True)
     if device is None:
-        device = tb.request("POST", "/api/device", {"name": DEMO_DEVICE}, query={"accessToken": token})
-        log.info("device_created", extra={"device": DEMO_DEVICE})
+        body = {"name": name, **({"additionalInfo": {"gateway": True}} if gateway else {})}
+        tb.request("POST", "/api/device", body, query={"accessToken": token})
+        log.info("device_created", extra={"device": name, "gateway": gateway})
         return
+    if gateway and not (device.get("additionalInfo") or {}).get("gateway"):
+        device["additionalInfo"] = {**(device.get("additionalInfo") or {}), "gateway": True}
+        tb.request("POST", "/api/device", device)
+        log.info("device_gateway_flag_set", extra={"device": name})
     credentials = tb.request("GET", f"/api/device/{device['id']['id']}/credentials")
     if credentials.get("credentialsType") == "ACCESS_TOKEN" and credentials.get("credentialsId") == token:
-        log.info("device_token_ok", extra={"device": DEMO_DEVICE})
+        log.info("device_token_ok", extra={"device": name})
         return
     credentials.update({"credentialsType": "ACCESS_TOKEN", "credentialsId": token, "credentialsValue": None})
     tb.request("POST", "/api/device/credentials", credentials)
-    log.info("device_token_updated", extra={"device": DEMO_DEVICE})
+    log.info("device_token_updated", extra={"device": name})
+
+
+def find_device_profile(tb: ThingsBoard, name: str) -> dict | None:
+    page = tb.request("GET", "/api/deviceProfiles", query={"pageSize": 100, "page": 0, "textSearch": name})
+    return next((p for p in page["data"] if p["name"] == name), None)
+
+
+def ensure_device_profiles(tb: ThingsBoard, asset_types: list[str]) -> None:
+    """One device profile per asset type, on the SequentialByOriginator queue (see the module docstring)."""
+    base = None
+    for name in asset_types:
+        profile = find_device_profile(tb, name)
+        if profile is None:
+            if base is None:
+                default_id = tb.request("GET", "/api/deviceProfileInfo/default")["id"]["id"]
+                base = tb.request("GET", f"/api/deviceProfile/{default_id}")
+            body = {k: v for k, v in base.items()
+                    if k not in ("id", "createdTime", "default", "version", "tenantId", "externalId", "name")}
+            body.update({"name": name, "default": False, "defaultQueueName": ALARM_QUEUE, "defaultRuleChainId": None,
+                         "description": f"Pipeline asset type {name!r} (config/telemetry.yaml)."})
+            created = tb.request("POST", "/api/deviceProfile", body)
+            log.info("device_profile_created", extra={"device_profile": name, "id": created["id"]["id"], "queue": ALARM_QUEUE})
+        elif profile.get("defaultQueueName") != ALARM_QUEUE:
+            profile["defaultQueueName"] = ALARM_QUEUE
+            tb.request("POST", "/api/deviceProfile", profile)
+            log.info("device_profile_updated", extra={"device_profile": name, "queue": ALARM_QUEUE})
+        else:
+            log.info("device_profile_ok", extra={"device_profile": name, "queue": ALARM_QUEUE})
+
+
+def import_dashboard(tb: ThingsBoard, path: Path = DASHBOARD_FILE) -> str:
+    """Create the dashboard, or overwrite its content if one with the same title exists; return its id."""
+    export = json.loads(path.read_text(encoding="utf-8"))
+    title = export["title"]
+    page = tb.request("GET", "/api/tenant/dashboards", query={"pageSize": 100, "page": 0, "textSearch": title})
+    existing = next((d for d in page["data"] if d["title"] == title), None)
+    body = {"title": title, "configuration": export["configuration"]}
+    if existing:
+        current = tb.request("GET", f"/api/dashboard/{existing['id']['id']}")
+        body.update({"id": current["id"], "version": current.get("version")})
+    saved = tb.request("POST", "/api/dashboard", body)
+    log.info("dashboard_written", extra={"dashboard": title, "id": saved["id"]["id"],
+                                         "action": "update" if existing else "create"})
+    return saved["id"]["id"]
+
+
+# --- alarm reconciliation ---------------------------------------------------------------------------------
+#
+# ThingsBoard keeps its alarms in a volume; Kafka starts empty at every `make up`. An alarm active in
+# ThingsBoard whose CLEARED event was lost with Kafka would stay active forever (a "ghost") and absorb the
+# next alarm of its type on that asset: ThingsBoard's Create Alarm updates an active alarm of the same type
+# instead of creating one, so the new alarm would keep the ghost's start time. reconcile_alarms clears, through
+# the REST API, every active pipeline alarm that is not active in telemetry.alarms, and records why in its
+# details. Pipeline alarms: alarms on devices of the configured asset types whose details carry an alarm_id
+# (set by AlarmMapping); anything else is left alone.
+#
+# It also keeps AlarmMapping's attribute alarm_last coherent: an entry still RAISED for an alarm that is no
+# longer active becomes CLEARED, keeping its alarm_id and raised_ts. A later alarm of that type (larger
+# raised_ts) is applied and creates a new ThingsBoard alarm; a replayed RAISED or CLEARED of the reconciled
+# alarm (same raised_ts) is dropped as a duplicate instead of re-creating or re-clearing it. Deleting the
+# entry would let such a replay re-create the alarm.
+#
+# make up runs it before any ThingsBoard sink starts. Run while a sink is writing, a rule-engine update of
+# alarm_last could interleave with this script's read-modify-write of the same attribute.
+
+RECONCILED_BY = "reconciliation"
+UNKNOWN = "UNKNOWN"  # latest record of an alarm_id that could not be decoded: treated as active, never cleared
+KAFKA_READ_TIMEOUT_S = 60
+
+
+def read_alarm_topic(consumer, topic: str, decode, timeout: float = KAFKA_READ_TIMEOUT_S) -> list[tuple[str, str | None]]:
+    """(alarm_id, state) of every record of the compacted alarm topic, up to its end offsets at the call.
+
+    state is None for a tombstone and UNKNOWN for a value decode() rejects. Records of one alarm_id share a
+    partition, so their order in the list is their order in the topic.
+    """
+    found = consumer.list_topics(topic, timeout=10).topics.get(topic)
+    if found is None or found.error is not None:
+        raise ImportFailed(f"Kafka topic {topic!r} not found; run `python -m broker.kafka.provision` first")
+    ends = {}
+    for p in sorted(found.partitions):
+        low, high = consumer.get_watermark_offsets(TopicPartition(topic, p), timeout=10)
+        if high > low:
+            ends[p] = high
+    consumer.assign([TopicPartition(topic, p, OFFSET_BEGINNING) for p in ends])
+    records: list[tuple[str, str | None]] = []
+    deadline = time.monotonic() + timeout
+    while ends:
+        if time.monotonic() > deadline:
+            raise ImportFailed(f"Kafka topic {topic!r}: end offsets not reached in {timeout:.0f} s")
+        msg = consumer.poll(1.0)
+        if msg is None:
+            continue
+        if msg.error():
+            raise ImportFailed(f"Kafka topic {topic!r}: {msg.error()}")
+        if msg.key() is not None:
+            key = msg.key().decode("utf-8", errors="replace")
+            if msg.value() is None:
+                records.append((key, None))
+            else:
+                try:
+                    records.append((key, decode(msg.value())["state"]))
+                except Exception as e:  # any decode failure: the alarm's state is unknown, so it is kept
+                    log.warning("alarm_record_undecodable", extra={"topic": topic, "partition": msg.partition(),
+                                                                   "offset": msg.offset(), "error": type(e).__name__})
+                    records.append((key, UNKNOWN))
+        if msg.partition() in ends and msg.offset() + 1 >= ends[msg.partition()]:
+            del ends[msg.partition()]
+    return records
+
+
+def latest_alarm_states(records: list[tuple[str, str | None]]) -> dict[str, str]:
+    """alarm_id -> state of its latest event; a tombstone removes the alarm_id."""
+    states: dict[str, str] = {}
+    for key, state in records:
+        if state is None:
+            states.pop(key, None)
+        else:
+            states[key] = state
+    return states
+
+
+def _pages(tb: ThingsBoard, path: str, query: dict):
+    page = 0
+    while True:
+        data = tb.request("GET", path, query={**query, "pageSize": 100, "page": page})
+        yield from data["data"]
+        if not data.get("hasNext"):
+            return
+        page += 1
+
+
+def _is_active(states: dict[str, str], alarm_id: str) -> bool:
+    return states.get(alarm_id) in ("RAISED", UNKNOWN)
+
+
+def reconcile_alarms(tb: ThingsBoard, asset_types: list[str], states: dict[str, str], topic: str) -> dict[str, int]:
+    """Clear the pipeline alarms of ThingsBoard not active in the alarm topic; make alarm_last agree. Idempotent."""
+    totals = {"devices": 0, "alarms_cleared": 0, "alarm_last_entries_cleared": 0}
+    for asset_type in asset_types:
+        for device in _pages(tb, "/api/tenant/devices", {"type": asset_type}):
+            totals["devices"] += 1
+            asset, device_id = device["name"], device["id"]["id"]
+            # Listed in full first: clearing while paging through the active alarms would shift the pages.
+            for alarm in list(_pages(tb, f"/api/alarm/DEVICE/{device_id}", {"searchStatus": "ACTIVE"})):
+                alarm_id = (alarm.get("details") or {}).get("alarm_id")
+                if not alarm_id or _is_active(states, alarm_id):
+                    continue
+                reason = (f"CLEARED in {topic}, not yet applied by the sink" if states.get(alarm_id) == "CLEARED"
+                          else f"not in {topic}: Kafka starts empty at make up, its CLEARED event was lost")
+                tb.request("POST", "/api/alarm", {**alarm, "details": {**alarm["details"], "cleared_by": RECONCILED_BY,
+                                                                        "reconciliation_reason": reason}})
+                tb.request("POST", f"/api/alarm/{alarm['id']['id']}/clear")
+                totals["alarms_cleared"] += 1
+                log.info("alarm_reconciled", extra={"asset": asset, "type": alarm["type"], "alarm_id": alarm_id,
+                                                    "thingsboard_alarm_id": alarm["id"]["id"], "reason": reason})
+            path = f"/api/plugins/telemetry/DEVICE/{device_id}"
+            attrs = tb.request("GET", f"{path}/values/attributes/SERVER_SCOPE", query={"keys": "alarm_last"}) or []
+            raw = next((a["value"] for a in attrs if a["key"] == "alarm_last"), None)
+            if raw is None:
+                continue
+            last = json.loads(raw)
+            stale = [t for t, e in last.items() if e.get("state") == "RAISED" and not _is_active(states, e.get("alarm_id"))]
+            if stale:
+                for t in stale:
+                    last[t] = {**last[t], "state": "CLEARED"}
+                    log.info("alarm_last_reconciled", extra={"asset": asset, "type": t, "alarm_id": last[t]["alarm_id"]})
+                tb.request("POST", f"{path}/attributes/SERVER_SCOPE", {"alarm_last": json.dumps(last)})
+                totals["alarm_last_entries_cleared"] += len(stale)
+    log.info("alarm_reconciliation_done", extra={**totals, "alarms_active_in_topic": sum(
+        1 for s in states.values() if s == "RAISED"), "topic": topic})
+    return totals
+
+
+# Real Kafka and Schema Registry clients for read_alarm_topic; exercised by the integration tests, like main().
+def read_alarms(topic: str) -> list[tuple[str, str | None]]:  # pragma: no cover
+    from confluent_kafka.schema_registry import SchemaRegistryClient
+    from confluent_kafka.schema_registry.avro import AvroDeserializer
+    from confluent_kafka.serialization import MessageField, SerializationContext
+
+    deserializer = AvroDeserializer(SchemaRegistryClient({"url": setting("SCHEMA_REGISTRY_URL", "http://localhost:8081")}))
+    context = SerializationContext(topic, MessageField.VALUE)
+    consumer = Consumer({"bootstrap.servers": setting("KAFKA_BOOTSTRAP", "localhost:9092"),
+                         "group.id": "thingsboard-import-reconciliation", "enable.auto.commit": False,
+                         "logger": logging.getLogger("librdkafka")})
+    try:
+        return read_alarm_topic(consumer, topic, lambda value: deserializer(value, context))
+    finally:
+        consumer.close()
 
 
 # Orchestration entry point: wires real MQTT, Kafka and Schema Registry
 # clients and runs until stopped. Exercised by the integration tests
 # (Task 2.5), not by unit tests; excluded from unit coverage by owner
-# decision (Task 2.4), the only exclusion in this file.
+# decision (Task 2.4), like read_alarms, the Kafka client it uses.
 def main() -> int:  # pragma: no cover
     jsonlog.configure("INFO")
     username = setting("TB_TENANT_USERNAME")
     tenant_pw = setting("TB_TENANT_PASSWORD")
     token = setting("TB_ACCESS_TOKEN")
+    gateway_token = setting("TB_GATEWAY_TOKEN")
     missing = [n for n, v in (("TB_TENANT_USERNAME", username), ("TB_TENANT_PASSWORD", tenant_pw),
-                              ("TB_ACCESS_TOKEN", token)) if not v]
+                              ("TB_ACCESS_TOKEN", token), ("TB_GATEWAY_TOKEN", gateway_token)) if not v]
     if missing:
         log.error("settings_missing", extra={"settings": missing, "hint": "set them in .env (see .env.example)"})
         return 1
@@ -316,9 +541,16 @@ def main() -> int:  # pragma: no cover
     tb = ThingsBoard(f"http://{setting('TB_HOST', 'localhost')}:{setting('TB_HTTP_PORT', '8080')}")
     try:
         tb.login(username, tenant_pw)
+        cfg = load_config()
+        asset_types = sorted({a.type for a in cfg.telemetry.assets})
+        ensure_device_profiles(tb, asset_types)
         import_chains(tb, firebase_url)
         ensure_device(tb, token)
-    except ImportFailed as e:
+        ensure_device(tb, gateway_token, PIPELINE_GATEWAY, gateway=True)
+        import_dashboard(tb)
+        topic = cfg.topics.kafka["telemetry_alarms"].name
+        reconcile_alarms(tb, asset_types, latest_alarm_states(read_alarms(topic)), topic)
+    except (ImportFailed, KafkaException) as e:
         log.error("import_failed", extra={"error": str(e)})
         return 1
     return 0

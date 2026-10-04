@@ -6,7 +6,10 @@ profile, or full with ThingsBoard), provisions it, and stops it at the end
 with `docker compose --profile full down`, never -v. It counts Docker volumes
 before and after and fails the session if any leaked. Before stopping, it
 saves `docker compose logs` as docker-compose.log in pytest's base temp
-directory, beside the component logs.
+directory, beside the component logs. With the full profile it also fails the
+session if any pipeline alarm is still active in ThingsBoard at the end
+(owner, Task 3.2): every test must leave the alarms it raised cleared, since
+ThingsBoard's volume outlives the session and its Kafka.
 
 Options:
   --stack-profile core|full   core: Mosquitto, ZooKeeper, Kafka, Schema Registry
@@ -73,6 +76,14 @@ def stack(request, tmp_path_factory):
 
     yield profile
 
+    leftover: list[dict] | str = []
+    if profile == "full":
+        try:
+            leftover = it.active_pipeline_alarms(it.thingsboard())
+        except Exception as e:  # reported below, after the stack is stopped
+            leftover = f"could not query ThingsBoard: {type(e).__name__}: {e}"
+        report["active_pipeline_alarms"] = leftover if isinstance(leftover, str) else len(leftover)
+
     # Container logs are gone after `down`; keep them next to the component
     # logs (pytest's base temp directory, which CI uploads on failure).
     logs = it.compose("--profile", "full", "logs", "--no-color", "--timestamps")
@@ -83,6 +94,7 @@ def stack(request, tmp_path_factory):
     report["volumes_after"] = it.volume_count()
     assert down.returncode == 0, down.stderr[-800:]
     assert report["volumes_after"] == report["volumes_before"], f"volumes leaked: {report}"
+    assert not leftover, f"pipeline alarms still active in ThingsBoard at the end of the session: {leftover}"
 
 
 @pytest.fixture
@@ -112,4 +124,5 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         terminalreporter.write_sep("-", "integration stack")
         terminalreporter.write_line(
             f"profile={report.get('profile')} up={report.get('up_s')}s ready={report.get('ready_s')}s "
-            f"down={report.get('down_s')}s volumes before={report.get('volumes_before')} after={report.get('volumes_after')}")
+            f"down={report.get('down_s')}s volumes before={report.get('volumes_before')} after={report.get('volumes_after')}"
+            + (f" active_pipeline_alarms={report['active_pipeline_alarms']}" if "active_pipeline_alarms" in report else ""))

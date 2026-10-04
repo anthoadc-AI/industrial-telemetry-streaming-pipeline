@@ -39,6 +39,7 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class Channel:
     name: str
+    label: str  # human-readable name: dashboard labels and ThingsBoard alarm types
     unit: str
     description: str
 
@@ -269,8 +270,9 @@ def _parse_telemetry(data: Mapping[str, Any]) -> TelemetryConfig:
     for name, c in _mapping(data["channels"], f"{w}.channels").items():
         cw = f"{w}.channels.{name}"
         c = _mapping(c, cw)
-        _keys(c, cw, {"unit", "description"})
-        channels[name] = Channel(name, _str(c["unit"], f"{cw}.unit"), _str(c["description"], f"{cw}.description"))
+        _keys(c, cw, {"label", "unit", "description"})
+        channels[name] = Channel(name, _str(c["label"], f"{cw}.label"), _str(c["unit"], f"{cw}.unit"),
+                                 _str(c["description"], f"{cw}.description"))
     if not channels:
         raise ConfigError(f"{w}.channels: at least one channel is required")
 
