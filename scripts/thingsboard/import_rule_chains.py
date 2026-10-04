@@ -40,8 +40,15 @@ up to 60 s apart (about 15 minutes), as the safety net behind the sink's rate
 limit (config/thingsboard.yaml).
 
 Device profiles: one per asset type in config/telemetry.yaml, on the
-PipelineSequential queue. The ThingsBoard sink's gateway creates each asset's
-device with its type, so the device gets its profile, and the queue, by name.
+PipelineSequential queue.
+
+Asset devices: one per asset in config/telemetry.yaml, created here with its
+type (so with its profile and the queue), or given its type back if it has
+another. The sink's gateway announces each device's type, but a device
+created without it, by anything else first, would get the default profile
+and ThingsBoard's parallel Main queue, silently (CI run 37215619234: devices
+first touched by a test helper got "default", and alarm events were applied
+out of order).
 
 Devices: the pipeline gateway (PIPELINE_GATEWAY, flagged as a gateway, token
 TB_GATEWAY_TOKEN) through which the sink publishes for every asset; and the
@@ -347,6 +354,21 @@ def ensure_device(tb: ThingsBoard, token: str, name: str = DEMO_DEVICE, gateway:
     log.info("device_token_updated", extra={"device": name})
 
 
+def ensure_asset_devices(tb: ThingsBoard, assets: list[tuple[str, str]]) -> None:
+    """Each (asset id, asset type) exists as a device of that type, so on its profile and its queue."""
+    for name, asset_type in assets:
+        device = tb.request("GET", "/api/tenant/devices", query={"deviceName": name}, allow_404=True)
+        if device is None:
+            created = tb.request("POST", "/api/device", {"name": name, "type": asset_type})
+            log.info("asset_device_created", extra={"device": name, "type": asset_type, "id": created["id"]["id"]})
+        elif device.get("type") != asset_type:
+            body = {k: v for k, v in device.items() if k != "deviceProfileId"}  # ThingsBoard resolves it from type
+            tb.request("POST", "/api/device", {**body, "type": asset_type})
+            log.info("asset_device_retyped", extra={"device": name, "from": device.get("type"), "type": asset_type})
+        else:
+            log.info("asset_device_ok", extra={"device": name, "type": asset_type})
+
+
 def find_device_profile(tb: ThingsBoard, name: str) -> dict | None:
     page = tb.request("GET", "/api/deviceProfiles", query={"pageSize": 100, "page": 0, "textSearch": name})
     return next((p for p in page["data"] if p["name"] == name), None)
@@ -590,6 +612,7 @@ def main() -> int:  # pragma: no cover
         import_chains(tb, firebase_url)
         ensure_device(tb, token)
         ensure_device(tb, gateway_token, PIPELINE_GATEWAY, gateway=True)
+        ensure_asset_devices(tb, [(a.id, a.type) for a in cfg.telemetry.assets])
         import_dashboard(tb)
         topic = cfg.topics.kafka["telemetry_alarms"].name
         reconcile_alarms(tb, asset_types, latest_alarm_states(read_alarms(topic)), topic)

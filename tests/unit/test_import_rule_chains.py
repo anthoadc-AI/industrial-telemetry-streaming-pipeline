@@ -701,3 +701,42 @@ def test_an_alarm_whose_latest_record_is_undecodable_is_kept():
     irc.reconcile_alarms(tb, ["pump"], {GHOST: irc.UNKNOWN, LIVE: "RAISED", PENDING: "RAISED"}, "telemetry.alarms")
     assert [a["status"] for a in tb.devices["pump-01"]["alarms"][:2]] == ["ACTIVE_UNACK", "ACTIVE_UNACK"]
     assert tb.devices["pump-01"]["alarm_last"][WARNING_TYPE]["state"] == "RAISED"
+
+
+class FakeDevices(irc.ThingsBoard):
+    """Devices by name; a device written with a type gets the profile of that name, as ThingsBoard does."""
+
+    def __init__(self, devices=()):
+        super().__init__("http://fake")
+        self.devices = {d["name"]: d for d in devices}
+        self.calls = []
+
+    def request(self, method, path, body=None, query=None, allow_404=False):
+        self.calls.append((method, path, body))
+        assert path in ("/api/tenant/devices", "/api/device")
+        if method == "GET":
+            return self.devices.get(query["deviceName"])
+        assert "deviceProfileId" not in body  # left for ThingsBoard to resolve from the type
+        saved = {**body, "id": body.get("id") or {"id": f"dev-{body['name']}"},
+                 "deviceProfileId": {"id": f"profile-{body['type']}"}}
+        self.devices[body["name"]] = saved
+        return saved
+
+
+def test_asset_devices_are_created_with_their_type_and_retyped_if_wrong(json_log):
+    """Hardening after CI run 37215619234: a device first created without a type got the default profile (Main
+    queue). The import creates every configured asset's device with its type, corrects a wrong one, idempotently."""
+    tb = FakeDevices([{"name": "pump-01", "type": "pump", "id": {"id": "p1"}, "deviceProfileId": {"id": "profile-pump"}},
+                      {"name": "motor-01", "type": "default", "id": {"id": "m1"}, "deviceProfileId": {"id": "profile-default"},
+                       "label": "kept"}])
+    assets = [("pump-01", "pump"), ("motor-01", "motor"), ("compressor-01", "compressor")]
+    irc.ensure_asset_devices(tb, assets)
+    assert {n: (d["type"], d["deviceProfileId"]["id"]) for n, d in tb.devices.items()} == {
+        "pump-01": ("pump", "profile-pump"), "motor-01": ("motor", "profile-motor"),
+        "compressor-01": ("compressor", "profile-compressor")}
+    assert tb.devices["motor-01"]["id"] == {"id": "m1"} and tb.devices["motor-01"]["label"] == "kept"  # same device, updated
+    assert [e["event"] for e in json_log() if e["event"].startswith("asset_device")] == \
+        ["asset_device_ok", "asset_device_retyped", "asset_device_created"]
+    writes = len([c for c in tb.calls if c[0] == "POST"])
+    irc.ensure_asset_devices(tb, assets)  # again: nothing to write
+    assert len([c for c in tb.calls if c[0] == "POST"]) == writes
