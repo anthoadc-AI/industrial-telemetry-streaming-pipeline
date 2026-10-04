@@ -484,14 +484,22 @@ def gateway_publish(entries: list[tuple[str, dict]]) -> None:
     rightly drops an older event that arrives after a newer one (seen with 20 in flight: 191 of 200 alarms)."""
     import paho.mqtt.client as mqtt
 
+    from config.loader import load_config
+
     irc = import_script()
+    types = {a.id: a.type for a in load_config(env={}).telemetry.assets}
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=unique("it-gateway"))
     client.username_pw_set(irc.setting("TB_GATEWAY_TOKEN"))
     client.connect(irc.setting("TB_HOST", "localhost"), int(irc.setting("TB_MQTT_PORT", "9883")))
     client.loop_start()
     try:
-        for device, entry in entries:
-            info = client.publish("v1/gateway/telemetry", json.dumps({device: [entry]}), qos=1)
+        # Announce each device with its type first, as the sink does (CI run 37215619234: without it, ThingsBoard
+        # created the devices with the default profile, on the parallel Main queue).
+        announced = [{"device": d, "type": types[d]} for d in dict.fromkeys(d for d, _ in entries) if d in types]
+        messages = [("v1/gateway/connect", a) for a in announced] + \
+                   [("v1/gateway/telemetry", {device: [entry]}) for device, entry in entries]
+        for topic, payload in messages:
+            info = client.publish(topic, json.dumps(payload), qos=1)
             info.wait_for_publish(30)
             assert info.is_published()
     finally:
@@ -561,3 +569,17 @@ def save_thingsboard_diagnostics(target: Path, since: float) -> list[str]:
     except Exception as e:  # diagnostics only: a failure here must not hide the session's result
         problems.append(f"failure records: {type(e).__name__}: {e}")
     return problems
+
+
+def devices_off_pipeline_queue(tb) -> list[dict]:
+    """Devices of the configured asset types whose profile is not on the PipelineSequential queue."""
+    from config.loader import load_config
+
+    off = []
+    for asset_type in sorted({a.type for a in load_config(env={}).telemetry.assets}):
+        for d in import_script()._pages(tb, "/api/tenant/devices", {"type": asset_type}):
+            profile = tb.request("GET", f"/api/deviceProfile/{d['deviceProfileId']['id']}")
+            if profile.get("defaultQueueName") != PIPELINE_QUEUE:
+                off.append({"device": d["name"], "type": d["type"], "profile": profile["name"],
+                            "queue": profile.get("defaultQueueName")})
+    return off

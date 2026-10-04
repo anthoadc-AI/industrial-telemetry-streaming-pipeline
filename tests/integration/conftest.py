@@ -13,8 +13,9 @@ session if any pipeline alarm is still active in ThingsBoard at the end
 (owner, Task 3.2): every test must leave the alarms it raised cleared, since
 ThingsBoard's volume outlives the session and its Kafka; if ThingsBoard
 dropped any message of the PipelineSequential queue during the session (its
-statistics, read from its log); or if AlarmMapping recorded a mapping failure
-(a test that provokes one removes it).
+statistics, read from its log); if AlarmMapping recorded a mapping failure
+(a test that provokes one removes it); or if a device of the configured asset
+types is on a profile that does not use PipelineSequential.
 
 Options:
   --stack-profile core|full   core: Mosquitto, ZooKeeper, Kafka, Schema Registry
@@ -93,16 +94,20 @@ def stack(request, tmp_path_factory):
             time.sleep(it.QUEUE_STATS_WAIT_S)  # the last minute's queue statistics, into the log
             stats = it.queue_stats_since(session_start)
             failures = it.mapping_failures_since(tb, session_start)
+            off_queue = it.devices_off_pipeline_queue(tb)
         except Exception as e:  # reported below, after the stack is stopped
             leftover = f"could not query ThingsBoard: {type(e).__name__}: {e}"
         else:
             report["pipeline_queue"] = (f"messages={stats['totalMsgs']} dropped={stats['timeoutMsgs'] + stats['failedMsgs']} "
                                         f"retried={stats['tmpTimeout'] + stats['tmpFailed']}")
             report["mapping_failures"] = len(failures)
+            report["devices_off_queue"] = len(off_queue)
             if stats["timeoutMsgs"] or stats["failedMsgs"]:
                 delivery.append(f"ThingsBoard dropped messages of {it.PIPELINE_QUEUE}: {stats}")
             if failures:
                 delivery.append(f"alarm mapping failures recorded: {failures}")
+            if off_queue:
+                delivery.append(f"pipeline devices not on {it.PIPELINE_QUEUE}: {off_queue}")
         report["active_pipeline_alarms"] = leftover if isinstance(leftover, str) else len(leftover)
 
     # Container logs are gone after `down`; keep them next to the component
@@ -157,5 +162,5 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             f"down={report.get('down_s')}s volumes before={report.get('volumes_before')} after={report.get('volumes_after')}"
             + (f" new={report['volumes_new']}" if "volumes_new" in report else "")
             + (f" pipeline_queue: {report['pipeline_queue']} mapping_failures={report['mapping_failures']}"
-               if "pipeline_queue" in report else "")
+               f" devices_off_queue={report['devices_off_queue']}" if "pipeline_queue" in report else "")
             + (f" active_pipeline_alarms={report['active_pipeline_alarms']}" if "active_pipeline_alarms" in report else ""))

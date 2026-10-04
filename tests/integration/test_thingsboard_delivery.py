@@ -98,21 +98,26 @@ def test_a_mapping_failure_is_recorded_and_does_not_hold_back_the_asset(stack, t
     bad = event("pump-01", "speed_rpm", now, "RAISED", now)
     good = [event("pump-01", "speed_rpm", now + 1000, "RAISED", now + 1000),
             event("pump-01", "speed_rpm", now + 1000, "CLEARED", now + 1500)]
-    it.gateway_publish([gateway_entry(bad, severity="BOGUS"), *(gateway_entry(e) for e in good)])
-    found = settled(tb, "pump-01", [good[0]["alarm_id"]], timeout=60)
-    assert [a["status"] for a in found] == ["CLEARED_UNACK"]  # applied after the failure
-    assert alarms_of(tb, device(tb, "pump-01")["id"]["id"], {bad["alarm_id"]}) == []
     gw = device(tb, it.import_script().PIPELINE_GATEWAY)["id"]["id"]
     path = f"/api/plugins/telemetry/DEVICE/{gw}"
-    window = {"startTs": int(since * 1000), "endTs": int(time.time() * 1000) + 60_000}
-    points = tb.request("GET", f"{path}/values/timeseries", query={"keys": "alarm_mapping_failed", **window, "limit": 10})
-    [failure] = [json.loads(p["value"]) for p in points.get("alarm_mapping_failed", [])]
-    assert (failure["asset"], failure["alarm_id"], failure["alarm_type"]) == ("pump-01", bad["alarm_id"], "Speed high (warning)")
-    stats = stats_after(since)
-    assert (stats["failedMsgs"], stats["tmpFailed"], stats["timeoutMsgs"]) == (0, 0, 0), stats  # handled, not retried
-    # This failure was provoked: remove it, so the session's check of mapping failures stays meaningful.
-    tb.request("DELETE", f"{path}/timeseries/delete", query={"keys": "alarm_mapping_failed", "deleteAllDataForKeys": "false",
-                                                              **window})
+    try:
+        it.gateway_publish([gateway_entry(bad, severity="BOGUS"), *(gateway_entry(e) for e in good)])
+        found = settled(tb, "pump-01", [good[0]["alarm_id"]], timeout=60)
+        assert [a["status"] for a in found] == ["CLEARED_UNACK"]  # applied after the failure
+        assert alarms_of(tb, device(tb, "pump-01")["id"]["id"], {bad["alarm_id"]}) == []
+        window = {"startTs": int(since * 1000), "endTs": int(time.time() * 1000) + 60_000}
+        points = tb.request("GET", f"{path}/values/timeseries", query={"keys": "alarm_mapping_failed", **window, "limit": 10})
+        [failure] = [json.loads(p["value"]) for p in points.get("alarm_mapping_failed", [])]
+        assert (failure["asset"], failure["alarm_id"], failure["alarm_type"]) == \
+            ("pump-01", bad["alarm_id"], "Speed high (warning)")
+        stats = stats_after(since)
+        assert (stats["failedMsgs"], stats["tmpFailed"], stats["timeoutMsgs"]) == (0, 0, 0), stats  # handled, not retried
+    finally:
+        # This failure was provoked: remove it, pass or fail, so the session's check of mapping failures only
+        # sees failures nobody provoked.
+        window = {"startTs": int(since * 1000), "endTs": int(time.time() * 1000) + 60_000}
+        tb.request("DELETE", f"{path}/timeseries/delete",
+                   query={"keys": "alarm_mapping_failed", "deleteAllDataForKeys": "false", **window})
 
 
 def test_an_event_applied_again_after_a_partial_run_is_absorbed(stack, tb, log_dir, offsets_mark):
@@ -145,7 +150,10 @@ def test_a_backlog_of_one_asset_reaches_thingsboard_without_a_drop(stack, tb, lo
     in docker-compose.yml stop being a safe pair."""
     asset, n = "pump-01", 3000
     start = datetime.now(timezone.utc) - timedelta(seconds=n + 600)
-    records = [{"asset_id": asset, "asset_type": "pump", "seq": i, "ts": start + timedelta(seconds=i), "synthetic": True,
+    # seq values of this run only (the current millisecond onward): the time window also holds pump-01 telemetry
+    # other tests and sessions wrote at real time (local run 1 of the series: 1,328 such points).
+    base = int(time.time() * 1000)
+    records = [{"asset_id": asset, "asset_type": "pump", "seq": base + i, "ts": start + timedelta(seconds=i), "synthetic": True,
                 "bearing_temperature_c": 53.0, "vibration_rms_mm_s": 2.6, "motor_current_a": 25.0, "speed_rpm": 2962.0,
                 "injected_fault": None} for i in range(n)]
     events, ids = pairs(asset, "bearing_temperature_c", 100, int(time.time() * 1000) - 300_000)
@@ -164,11 +172,12 @@ def test_a_backlog_of_one_asset_reaches_thingsboard_without_a_drop(stack, tb, lo
     dev = device(tb, asset)["id"]["id"]
     span = {"startTs": int(start.timestamp() * 1000), "endTs": int((start + timedelta(seconds=n)).timestamp() * 1000)}
 
-    def all_points():
+    def mine():
         v = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{dev}/values/timeseries",
-                       query={"keys": "seq", **span, "limit": 10_000})
-        return len(v.get("seq", [])) == n
-    assert wait_until(all_points, timeout=120, every=5), "telemetry points missing"
+                       query={"keys": "seq", **span, "limit": 20_000})
+        return sorted(int(float(p["value"])) for p in v.get("seq", []) if base <= int(float(p["value"])) < base + n)
+    assert wait_until(lambda: mine() == list(range(base, base + n)), timeout=120, every=5), \
+        f"{len(mine())} of the backlog's {n} telemetry points in ThingsBoard"
     found = settled(tb, asset, ids)
     assert len(found) == len(ids) and not any(a["status"].startswith("ACTIVE") for a in found)
     stats = stats_after(since)
