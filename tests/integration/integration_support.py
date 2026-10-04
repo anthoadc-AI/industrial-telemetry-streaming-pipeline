@@ -48,9 +48,34 @@ def port_open(port: int, host: str = "localhost") -> bool:
         return s.connect_ex((host, port)) == 0
 
 
-def volume_count() -> int:
+def volume_names() -> set[str]:
     out = subprocess.run(["docker", "volume", "ls", "-q"], capture_output=True, text=True, check=True).stdout
-    return len(out.split())
+    return set(out.split())
+
+
+def compose_config() -> dict:
+    """docker-compose.yml as Compose resolves it (project name, volume names), all profiles included."""
+    result = compose("--profile", "full", "config", "--format", "json")
+    if result.returncode != 0:
+        raise RuntimeError(f"docker compose config failed: {result.stderr[-500:]}")
+    return json.loads(result.stdout)
+
+
+def project_volume_names(config: dict) -> set[str]:
+    """The named volumes the project declares, as Docker names them (<project>_<volume> unless the file sets a
+    name). External volumes are left out: the project uses them but never creates them."""
+    return {(spec or {}).get("name") or f"{config['name']}_{key}"
+            for key, spec in (config.get("volumes") or {}).items() if not (spec or {}).get("external")}
+
+
+def leaked_volumes(before: set[str], after: set[str], allowed: set[str]) -> set[str]:
+    """Volumes that appeared during the session and are not the project's own named volumes.
+
+    The project's named volumes (ThingsBoard's data and logs) are created by the first `up` on a machine and
+    kept by `down` without -v, by design: on a clean machine, CI included, they appear once and are not a leak.
+    Any other new volume, an anonymous one above all, is.
+    """
+    return (after - before) - allowed
 
 
 def unique(prefix: str) -> str:

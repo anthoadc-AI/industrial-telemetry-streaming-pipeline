@@ -3,8 +3,10 @@
 The session fixture refuses to run if a stack (or anything on its ports) is
 already up, starts the stack with the repository's docker-compose.yml (core
 profile, or full with ThingsBoard), provisions it, and stops it at the end
-with `docker compose --profile full down`, never -v. It counts Docker volumes
-before and after and fails the session if any leaked. Before stopping, it
+with `docker compose --profile full down`, never -v. It lists Docker volumes
+before and after and fails the session if any leaked: a new volume other than
+the named volumes docker-compose.yml declares (those are created by the first
+`up` on a clean machine and kept by `down`, by design). Before stopping, it
 saves `docker compose logs` as docker-compose.log in pytest's base temp
 directory, beside the component logs. With the full profile it also fails the
 session if any pipeline alarm is still active in ThingsBoard at the end
@@ -60,7 +62,9 @@ def stack(request, tmp_path_factory):
 
     report = request.config.stack_report
     report["profile"] = profile
-    report["volumes_before"] = it.volume_count()
+    volumes_before = it.volume_names()
+    allowed = it.project_volume_names(it.compose_config())
+    report["volumes_before"] = len(volumes_before)
     profile_args = ["--profile", "full"] if profile == "full" else []
     started = time.monotonic()
     up = it.compose(*profile_args, "up", "-d", "--wait", "--wait-timeout", "600", "--force-recreate")
@@ -91,9 +95,14 @@ def stack(request, tmp_path_factory):
     started = time.monotonic()
     down = it.compose("--profile", "full", "down")
     report["down_s"] = round(time.monotonic() - started, 1)
-    report["volumes_after"] = it.volume_count()
+    volumes_after = it.volume_names()
+    report["volumes_after"] = len(volumes_after)
+    new = sorted(volumes_after - volumes_before)
+    if new:
+        report["volumes_new"] = new
     assert down.returncode == 0, down.stderr[-800:]
-    assert report["volumes_after"] == report["volumes_before"], f"volumes leaked: {report}"
+    leaked = it.leaked_volumes(volumes_before, volumes_after, allowed)
+    assert not leaked, f"volumes leaked: {sorted(leaked)} (project volumes allowed: {sorted(allowed)}); {report}"
     assert not leftover, f"pipeline alarms still active in ThingsBoard at the end of the session: {leftover}"
 
 
@@ -125,4 +134,5 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         terminalreporter.write_line(
             f"profile={report.get('profile')} up={report.get('up_s')}s ready={report.get('ready_s')}s "
             f"down={report.get('down_s')}s volumes before={report.get('volumes_before')} after={report.get('volumes_after')}"
+            + (f" new={report['volumes_new']}" if "volumes_new" in report else "")
             + (f" active_pipeline_alarms={report['active_pipeline_alarms']}" if "active_pipeline_alarms" in report else ""))
