@@ -25,14 +25,23 @@ Placeholders in the exports:
 - ``${RULE_CHAIN_ID:<name>}`` in each rule-chain input node, replaced by the
   id that the named chain has in this ThingsBoard instance.
 
+Rule-engine queue: PipelineSequential (PIPELINE_QUEUE), created or updated
+with the system administrator account (TB_SYSADMIN_USERNAME,
+TB_SYSADMIN_PASSWORD; used by this script only). It hands ThingsBoard a
+device's next message only after the previous one has been fully processed,
+so AlarmMapping's read-modify-write of a device attribute never interleaves
+(verified in Task 3.2: with the default BURST queue the same events left wrong
+and duplicated alarms). ThingsBoard's own SequentialByOriginator queue does
+the same, but gives a batch of messages 2 s and drops what is left after three
+retries: one device's messages cost about 150 ms each, one after another, so a
+burst of one asset's messages lost alarm events (CI run 37168739715, and
+locally). PipelineSequential gives a batch 60 s and retries 20 times, from 5 s
+up to 60 s apart (about 15 minutes), as the safety net behind the sink's rate
+limit (config/thingsboard.yaml).
+
 Device profiles: one per asset type in config/telemetry.yaml, on the
-SequentialByOriginator queue. AlarmMapping reads and rewrites a device
-attribute per event; that queue hands ThingsBoard a device's next message
-only after the previous one has been fully processed, so those
-read-modify-write steps never interleave (verified in Task 3.2: with the
-default BURST queue the same events left wrong and duplicated alarms).
-The ThingsBoard sink's gateway creates each asset's device with its type, so
-the device gets its profile, and the queue, by name.
+PipelineSequential queue. The ThingsBoard sink's gateway creates each asset's
+device with its type, so the device gets its profile, and the queue, by name.
 
 Devices: the pipeline gateway (PIPELINE_GATEWAY, flagged as a gateway, token
 TB_GATEWAY_TOKEN) through which the sink publishes for every asset; and the
@@ -48,7 +57,7 @@ alarm_reconciliation_done with the totals, also when they are 0.
 
 Configuration comes from the environment, falling back to the repository's
 .env file for anything unset: TB_HOST, TB_HTTP_PORT, TB_TENANT_USERNAME,
-TB_TENANT_PASSWORD, TB_ACCESS_TOKEN, TB_GATEWAY_TOKEN, FIREBASE_ENABLED,
+TB_TENANT_PASSWORD, TB_SYSADMIN_USERNAME, TB_SYSADMIN_PASSWORD, TB_ACCESS_TOKEN, TB_GATEWAY_TOKEN, FIREBASE_ENABLED,
 FIREBASE_DB_URL, KAFKA_BOOTSTRAP, SCHEMA_REGISTRY_URL. The script never prints the password, the session token,
 a device token or a rendered Firebase URL.
 """
@@ -87,7 +96,18 @@ RETIRED_CHAINS = ("CreateAndClearAlarms", "TempToFirebase", "AlarmToFirebase")
 ROOT_CHAIN = "Root Rule Chain"
 DEMO_DEVICE = "DHT11 Demo Device"
 PIPELINE_GATEWAY = "pipeline-gateway"
-ALARM_QUEUE = "SequentialByOriginator"
+ALARM_QUEUE = "PipelineSequential"
+# The queue as this script creates it (values: owner decision, Task 3.2 fix, from the measurements above).
+PIPELINE_QUEUE = {
+    "name": ALARM_QUEUE, "topic": "tb_rule_engine.pipeline", "pollInterval": 25, "partitions": 10,
+    "consumerPerPartition": True, "packProcessingTimeout": 60_000,
+    "submitStrategy": {"type": "SEQUENTIAL_BY_ORIGINATOR", "batchSize": 100},
+    "processingStrategy": {"type": "RETRY_FAILED_AND_TIMED_OUT", "retries": 20, "failurePercentage": 0.0,
+                           "pauseBetweenRetries": 5, "maxPauseBetweenRetries": 60},
+    "additionalInfo": {"description": "Pipeline devices: one message at a time per device, retried, never dropped "
+                                      "at the first timeout (scripts/thingsboard/import_rule_chains.py).",
+                       "customProperties": "", "duplicateMsgToAllPartitions": False},
+}
 FIREBASE_PLACEHOLDER = "${FIREBASE_DB_URL}"
 CHAIN_REF = re.compile(r"^\$\{RULE_CHAIN_ID:(.+)\}$")
 LOGIN_RETRY_S = 120
@@ -144,7 +164,7 @@ class ThingsBoard:
                 return
             except (ImportFailed, urllib.error.URLError, OSError) as e:
                 if isinstance(e, ImportFailed) and "HTTP 401" in str(e):
-                    raise ImportFailed("login rejected: check TB_TENANT_USERNAME and TB_TENANT_PASSWORD") from None
+                    raise ImportFailed(f"login rejected for {username}: check its username and password settings") from None
                 if time.monotonic() >= deadline:
                     raise ImportFailed(f"ThingsBoard not reachable at {self.base_url}: {e}") from None
                 time.sleep(5)
@@ -332,8 +352,24 @@ def find_device_profile(tb: ThingsBoard, name: str) -> dict | None:
     return next((p for p in page["data"] if p["name"] == name), None)
 
 
+def ensure_pipeline_queue(sysadmin: ThingsBoard) -> None:
+    """PipelineSequential exists with exactly PIPELINE_QUEUE's settings (needs a system administrator session)."""
+    page = sysadmin.request("GET", "/api/queues", query={"serviceType": "TB_RULE_ENGINE", "pageSize": 100, "page": 0})
+    queue = next((q for q in page["data"] if q["name"] == ALARM_QUEUE), None)
+    if queue is None:
+        created = sysadmin.request("POST", "/api/queues", PIPELINE_QUEUE, query={"serviceType": "TB_RULE_ENGINE"})
+        log.info("queue_created", extra={"queue": ALARM_QUEUE, "id": created["id"]["id"]})
+        return
+    drift = sorted(k for k, v in PIPELINE_QUEUE.items() if queue.get(k) != v)
+    if not drift:
+        log.info("queue_ok", extra={"queue": ALARM_QUEUE})
+        return
+    sysadmin.request("POST", "/api/queues", {**queue, **PIPELINE_QUEUE}, query={"serviceType": "TB_RULE_ENGINE"})
+    log.info("queue_updated", extra={"queue": ALARM_QUEUE, "settings": drift})
+
+
 def ensure_device_profiles(tb: ThingsBoard, asset_types: list[str]) -> None:
-    """One device profile per asset type, on the SequentialByOriginator queue (see the module docstring)."""
+    """One device profile per asset type, on the PipelineSequential queue (see the module docstring)."""
     base = None
     for name in asset_types:
         profile = find_device_profile(tb, name)
@@ -524,9 +560,12 @@ def main() -> int:  # pragma: no cover
     jsonlog.configure("INFO")
     username = setting("TB_TENANT_USERNAME")
     tenant_pw = setting("TB_TENANT_PASSWORD")
+    sysadmin_user = setting("TB_SYSADMIN_USERNAME")
+    sysadmin_pw = setting("TB_SYSADMIN_PASSWORD")
     token = setting("TB_ACCESS_TOKEN")
     gateway_token = setting("TB_GATEWAY_TOKEN")
     missing = [n for n, v in (("TB_TENANT_USERNAME", username), ("TB_TENANT_PASSWORD", tenant_pw),
+                              ("TB_SYSADMIN_USERNAME", sysadmin_user), ("TB_SYSADMIN_PASSWORD", sysadmin_pw),
                               ("TB_ACCESS_TOKEN", token), ("TB_GATEWAY_TOKEN", gateway_token)) if not v]
     if missing:
         log.error("settings_missing", extra={"settings": missing, "hint": "set them in .env (see .env.example)"})
@@ -538,8 +577,12 @@ def main() -> int:  # pragma: no cover
         log.error("firebase_url_missing", extra={"detail": "FIREBASE_ENABLED=true but FIREBASE_DB_URL is empty"})
         return 1
 
-    tb = ThingsBoard(f"http://{setting('TB_HOST', 'localhost')}:{setting('TB_HTTP_PORT', '8080')}")
+    url = f"http://{setting('TB_HOST', 'localhost')}:{setting('TB_HTTP_PORT', '8080')}"
+    tb = ThingsBoard(url)
     try:
+        sysadmin = ThingsBoard(url)
+        sysadmin.login(sysadmin_user, sysadmin_pw)
+        ensure_pipeline_queue(sysadmin)  # before the profiles, which name it
         tb.login(username, tenant_pw)
         cfg = load_config()
         asset_types = sorted({a.type for a in cfg.telemetry.assets})

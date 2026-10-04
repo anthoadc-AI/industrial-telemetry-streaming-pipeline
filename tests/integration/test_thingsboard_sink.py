@@ -118,7 +118,7 @@ def test_sink_forwards_telemetry_with_the_sample_timestamps(stack, tb, log_dir):
     for asset, (d, values) in rows.items():
         profile = tb.request("GET", f"/api/deviceProfile/{d['deviceProfileId']['id']}")
         assert d["type"] == profile["name"] == expected_types[asset]
-        assert profile["defaultQueueName"] == "SequentialByOriginator"
+        assert profile["defaultQueueName"] == "PipelineSequential"
         assert len(values["vibration_rms_mm_s"]) == 10 and sorted(int(s["value"]) for s in values["seq"]) == list(range(10))
     assert sink.non_json_lines() == 0
 

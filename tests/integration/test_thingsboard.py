@@ -62,7 +62,7 @@ def test_profiles_gateway_and_dashboard_imported(stack):
     types = sorted({a.type for a in load_config(env={}).telemetry.assets})
     for name in types:
         profile = irc.find_device_profile(tb, name)
-        assert profile and profile["defaultQueueName"] == "SequentialByOriginator", name
+        assert profile and profile["defaultQueueName"] == irc.ALARM_QUEUE == "PipelineSequential", name
     gateway = tb.request("GET", "/api/tenant/devices", query={"deviceName": irc.PIPELINE_GATEWAY})
     assert gateway["additionalInfo"]["gateway"] is True
     dashboards = tb.request("GET", "/api/tenant/dashboards",

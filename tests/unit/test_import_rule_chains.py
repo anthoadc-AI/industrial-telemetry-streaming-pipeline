@@ -372,17 +372,53 @@ def test_an_unresolved_firebase_node_stops_the_import(monkeypatch):
         irc.import_chains(FakeThingsBoard(), None)
 
 
-def test_device_profiles_are_created_on_the_sequential_queue(json_log):
-    tb = FakeThingsBoard(profiles=[{"name": "pump", "id": {"id": "p"}, "defaultQueueName": "Main"},
-                                   {"name": "motor", "id": {"id": "m"}, "defaultQueueName": "SequentialByOriginator"}])
+def test_device_profiles_are_created_on_the_pipeline_queue(json_log):
+    tb = FakeThingsBoard(profiles=[{"name": "pump", "id": {"id": "p"}, "defaultQueueName": "SequentialByOriginator"},
+                                   {"name": "motor", "id": {"id": "m"}, "defaultQueueName": "PipelineSequential"}])
     irc.ensure_device_profiles(tb, ["compressor", "motor", "pump"])
     assert {n: p["defaultQueueName"] for n, p in tb.profiles.items()} == dict.fromkeys(["pump", "motor", "compressor"],
-                                                                                         "SequentialByOriginator")
+                                                                                         "PipelineSequential")
     created = tb.profiles["compressor"]
     assert created["default"] is False and created["defaultRuleChainId"] is None and "id" not in \
         next(c[2] for c in tb.calls if c[0] == "POST" and c[2]["name"] == "compressor")
     assert [e["event"] for e in json_log() if e["event"].startswith("device_profile")] == \
         ["device_profile_created", "device_profile_ok", "device_profile_updated"]
+
+
+class FakeQueues(irc.ThingsBoard):
+    """The system administrator's view of the rule-engine queues."""
+
+    def __init__(self, queues=()):
+        super().__init__("http://fake")
+        self.queues = {q["name"]: q for q in queues}
+        self.calls = []
+
+    def request(self, method, path, body=None, query=None, allow_404=False):
+        self.calls.append((method, path, body, query))
+        assert path == "/api/queues" and query["serviceType"] == "TB_RULE_ENGINE"
+        if method == "GET":
+            return {"data": list(self.queues.values()), "hasNext": False}
+        self.queues[body["name"]] = {**body, "id": body.get("id") or {"id": "q-new"}}
+        return self.queues[body["name"]]
+
+
+def test_pipeline_queue_is_created_then_kept_then_corrected(json_log):
+    """Owner decision (Task 3.2 fix): 60 s per batch, 20 retries from 5 s up to 60 s, never dropped at the first timeout."""
+    tb = FakeQueues([{"name": "SequentialByOriginator", "id": {"id": "s"}}])
+    irc.ensure_pipeline_queue(tb)
+    q = tb.queues["PipelineSequential"]
+    assert q["submitStrategy"]["type"] == "SEQUENTIAL_BY_ORIGINATOR" and q["packProcessingTimeout"] == 60_000
+    assert q["processingStrategy"] == {"type": "RETRY_FAILED_AND_TIMED_OUT", "retries": 20, "failurePercentage": 0.0,
+                                       "pauseBetweenRetries": 5, "maxPauseBetweenRetries": 60}
+    irc.ensure_pipeline_queue(tb)  # unchanged: nothing written
+    tb.queues["PipelineSequential"]["packProcessingTimeout"] = 2000  # changed by hand in the UI
+    irc.ensure_pipeline_queue(tb)
+    assert tb.queues["PipelineSequential"]["packProcessingTimeout"] == 60_000
+    assert tb.queues["PipelineSequential"]["id"] == {"id": "q-new"}  # updated in place, same queue
+    assert [c[0] for c in tb.calls] == ["GET", "POST", "GET", "GET", "POST"]
+    events = [e for e in json_log() if e["event"].startswith("queue_")]
+    assert [e["event"] for e in events] == ["queue_created", "queue_ok", "queue_updated"]
+    assert events[2]["settings"] == ["packProcessingTimeout"]
 
 
 def test_the_gateway_device_is_created_and_flagged(json_log):
