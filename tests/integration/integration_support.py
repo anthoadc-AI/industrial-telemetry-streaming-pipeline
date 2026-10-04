@@ -528,3 +528,36 @@ def mapping_failures_since(tb, since: float) -> list[dict]:
                    query={"keys": "alarm_mapping_failed", "startTs": int(since * 1000), "endTs": int(time.time() * 1000) + 60_000,
                           "limit": 1000})
     return [json.loads(p["value"]) for p in v.get("alarm_mapping_failed", [])]
+
+
+def alarm_mapping_debug_failures(tb, since: float) -> list[dict]:
+    """The failure events AlarmMapping's nodes keep (debug: failures only): node, error text and message."""
+    chain = tb.find_rule_chain("AlarmMapping")
+    if chain is None:
+        return []
+    md = tb.request("GET", f"/api/ruleChain/{chain['id']['id']}/metadata")
+    found = []
+    for node in md["nodes"]:
+        page = tb.request("GET", f"/api/events/RULE_NODE/{node['id']['id']}/DEBUG_RULE_NODE",
+                          query={"tenantId": chain["tenantId"]["id"], "pageSize": 1000, "page": 0,
+                                 "startTime": int(since * 1000)})
+        found += [{"node": node["name"], "ts": e["createdTime"], "relation": e["body"].get("relationType"),
+                   "error": e["body"].get("error"), "data": e["body"].get("data")} for e in page["data"]]
+    return found
+
+
+def save_thingsboard_diagnostics(target: Path, since: float) -> list[str]:
+    """Copy ThingsBoard's GC log and the session's mapping-failure records into target (pytest's base temp
+    directory, which CI uploads when a job fails). Returns what could not be saved; never raises."""
+    problems = []
+    cp = compose("--profile", "full", "cp", "thingsboard:/var/log/thingsboard/gc.log", str(target / "thingsboard-gc.log"))
+    if cp.returncode != 0:
+        problems.append(f"gc.log: {cp.stderr.strip()[-200:]}")
+    try:
+        tb = thingsboard()
+        records = {"alarm_mapping_failed": mapping_failures_since(tb, since),
+                   "alarm_mapping_debug_failures": alarm_mapping_debug_failures(tb, since)}
+        (target / "thingsboard-failures.json").write_text(json.dumps(records, indent=1), encoding="utf-8")
+    except Exception as e:  # diagnostics only: a failure here must not hide the session's result
+        problems.append(f"failure records: {type(e).__name__}: {e}")
+    return problems

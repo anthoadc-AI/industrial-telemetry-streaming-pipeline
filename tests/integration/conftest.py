@@ -106,9 +106,12 @@ def stack(request, tmp_path_factory):
         report["active_pipeline_alarms"] = leftover if isinstance(leftover, str) else len(leftover)
 
     # Container logs are gone after `down`; keep them next to the component
-    # logs (pytest's base temp directory, which CI uploads on failure).
+    # logs (pytest's base temp directory, which CI uploads on failure), with
+    # ThingsBoard's GC log and the session's mapping-failure records.
     logs = it.compose("--profile", "full", "logs", "--no-color", "--timestamps")
     (tmp_path_factory.getbasetemp() / "docker-compose.log").write_text(logs.stdout + logs.stderr, encoding="utf-8")
+    if profile == "full":
+        report["diagnostics_not_saved"] = it.save_thingsboard_diagnostics(tmp_path_factory.getbasetemp(), session_start)
     started = time.monotonic()
     down = it.compose("--profile", "full", "down")
     report["down_s"] = round(time.monotonic() - started, 1)
