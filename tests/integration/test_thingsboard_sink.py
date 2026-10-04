@@ -270,8 +270,12 @@ def queue_stats(tb):
 
 
 def test_simulator_telemetry_causes_no_rule_engine_failure(stack, tb, log_dir):
-    """Telemetry without a temperature field (the retired MaxTemp filter's risk) and alarm events through the
-    real Root and AlarmMapping: no failed message in a statistics period that lies inside the sending window."""
+    """Telemetry without a temperature field (the retired MaxTemp filter's risk) through the real Root and
+    AlarmMapping: no failed message in a statistics period that lies inside the sending window.
+
+    No alarm consumer runs here, so no alarm event is sent: the simulator's fault only drives the values, and
+    AlarmMapping sees telemetry without alarm keys, the case it must pass through. Alarm events through the rule
+    chains are covered by the other tests of this module."""
     sink = it.thingsboard_sink(log_dir, "sink", fresh_sink_group(), duration=150)
     b = it.bridge(log_dir, "bridge", 100_000, duration=140)
     started = int(time.time() * 1000)
