@@ -466,17 +466,20 @@ def test_dashboard_is_created_then_updated_by_title(json_log, tmp_path):
     assert [e["action"] for e in json_log() if e["event"] == "dashboard_written"] == ["create", "update"]
 
 
-def test_the_committed_dashboard_names_no_device_and_selects_the_configured_types(cfg):
+def test_the_committed_dashboard_names_no_asset_and_selects_the_configured_types(cfg):
+    """Assets are selected by type; the one device named is the pipeline gateway, where mapping failures are counted."""
     text = irc.DASHBOARD_FILE.read_text(encoding="utf-8")
     dashboard = json.loads(text)
-    assert '"entityType": "DEVICE"' not in text and '"singleEntity"' not in text
+    assert '"singleEntity"' not in text and not any(a.id in text for a in cfg.telemetry.assets)
     filters = [a["filter"] for a in dashboard["configuration"]["entityAliases"].values()]
     by_type = next(f for f in filters if f["type"] == "deviceType")
     assert sorted(by_type["deviceTypes"]) == sorted({a.type for a in cfg.telemetry.assets})
-    assert {f["type"] for f in filters} == {"deviceType", "stateEntity"}
+    assert {f["type"] for f in filters} == {"deviceType", "stateEntity", "entityName"}
+    [named] = [f for f in filters if f["type"] == "entityName"]
+    assert (named["entityType"], named["entityNameFilter"]) == ("DEVICE", irc.PIPELINE_GATEWAY)
     keys = {k["name"] for w in dashboard["configuration"]["widgets"].values()
             for d in (w["config"].get("datasources") or []) for k in d["dataKeys"] if k["type"] == "timeseries"}
-    assert keys == set(cfg.telemetry.channels)
+    assert keys == set(cfg.telemetry.channels) | {"alarm_mapping_failed"}
 
 
 def test_duplicate_chain_names_stop_the_import():
