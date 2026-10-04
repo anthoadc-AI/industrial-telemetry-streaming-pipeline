@@ -26,7 +26,9 @@ DEFAULTS = {
 }
 DEFAULTS["system.alarm_widgets.alarms_table"]["defaultConfig"].update({
     "alarmSource": {"type": "function", "dataKeys": [{"name": "createdTime", "type": "alarm", "label": "Created time"},
-                                                     {"name": "originator", "type": "alarm", "label": "Originator"}]},
+                                                     {"name": "originator", "type": "alarm", "label": "Originator"},
+                                                     {"name": "type", "type": "alarm", "label": "Type", "settings": {}},
+                                                     {"name": "status", "type": "alarm", "label": "Status"}]},
     "settings": {"allowClear": True, "allowAcknowledgment": True, "allowAssign": True, "alarmsTitle": "Alarms"},
     "timewindow": {"realtime": {"interval": 1000, "timewindowMs": 86_400_000}},
 })
@@ -84,6 +86,8 @@ def test_alarm_table_cannot_clear_and_shows_the_event_time(cfg):
     keys = [k["name"] for k in alarms["config"]["alarmSource"]["dataKeys"]]
     assert keys[0] == "startTime" and "createdTime" not in keys and "originator" in keys
     assert alarms["config"]["timewindow"]["realtime"]["timewindowMs"] == 30 * 86_400_000
+    widths = {k["name"]: k.get("settings", {}).get("columnWidth") for k in alarms["config"]["alarmSource"]["dataKeys"]}
+    assert (widths["type"], widths["status"]) == ("240px", "190px")  # the longest type and status on one line
 
 
 def test_plant_view_fits_one_screen_and_shows_every_asset(cfg):
@@ -97,14 +101,20 @@ def test_plant_view_fits_one_screen_and_shows_every_asset(cfg):
     [alarms] = widgets_of(d, "system.alarm_widgets.alarms_table")
     assert rows[alarms["id"]][0] >= rows[table["id"]][1]  # alarms below the assets, counters beside them
     assert max(end for _, end in rows.values()) <= 16
+    # Height for the tables at 125 % scaling with the side menu (owner review): compact rows, no dashboard title
+    # (the breadcrumb names the view), no time-window line inside the alarms table.
+    assert table["config"]["widgetCss"] == alarms["config"]["widgetCss"] == bd.COMPACT_ROWS
+    assert d["configuration"]["settings"]["showTitle"] is False and alarms["config"]["displayTimewindow"] is False
 
 
 def test_asset_view_names_the_asset_and_offers_a_way_back(cfg):
     d = bd.build(DEFAULTS, cfg.telemetry)
     [header] = widgets_of(d, "system.cards.markdown_card")
-    assert "${entityName}" in header["config"]["settings"]["markdownTextPattern"]
+    assert header["config"]["title"] == "${entityName}" and "${Type}" in header["config"]["settings"]["markdownTextPattern"]
+    assert "overflow: hidden" in header["config"]["settings"]["markdownCss"]  # no scrollbar of its own
     [back] = header["config"]["actions"]["headerButton"]
-    assert (back["type"], back["targetDashboardStateId"]) == ("openDashboardState", "default")
+    # Back resets the state stack to the plant view; opening the default state would stack it on the asset view.
+    assert (back["type"], back["customFunction"]) == ("custom", "widgetContext.stateController.resetState();")
     charts = widgets_of(d, "system.time_series_chart")
     assert len(charts) == len(cfg.telemetry.channels) and all(c["config"]["title"].startswith("${entityName}: ") for c in charts)
     assert header["id"] in d["configuration"]["states"]["asset"]["layouts"]["main"]["widgets"]

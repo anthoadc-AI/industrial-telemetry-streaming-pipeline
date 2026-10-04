@@ -126,7 +126,8 @@
           },
           "showTitleIcon": false,
           "titleIcon": "list",
-          "iconColor": null
+          "iconColor": null,
+          "widgetCss": ".mat-mdc-header-row { height: 40px !important; min-height: 40px; }\n.mat-mdc-row { height: 36px !important; min-height: 36px; }"
         },
         "id": "2d60c287-b383-57f5-981a-511a9b149e52"
       },
@@ -537,7 +538,8 @@
                   "useCellStyleFunction": false,
                   "cellStyleFunction": "",
                   "useCellContentFunction": false,
-                  "cellContentFunction": ""
+                  "cellContentFunction": "",
+                  "columnWidth": "240px"
                 },
                 "_hash": 0.7323586880398418
               },
@@ -561,7 +563,8 @@
                   "useCellStyleFunction": false,
                   "cellStyleFunction": "",
                   "useCellContentFunction": false,
-                  "cellContentFunction": ""
+                  "cellContentFunction": "",
+                  "columnWidth": "190px"
                 },
                 "_hash": 0.6588418951443418
               },
@@ -586,7 +589,7 @@
           "iconSize": "24px",
           "titleTooltip": "",
           "widgetStyle": {},
-          "displayTimewindow": true,
+          "displayTimewindow": false,
           "actions": {},
           "alarmStatusList": [
             "ACTIVE"
@@ -595,7 +598,8 @@
           "alarmTypeList": [],
           "searchPropagatedAlarms": false,
           "configMode": "basic",
-          "alarmFilterConfig": null
+          "alarmFilterConfig": null,
+          "widgetCss": ".mat-mdc-header-row { height: 40px !important; min-height: 40px; }\n.mat-mdc-row { height: 36px !important; min-height: 36px; }"
         },
         "id": "5eaa985d-4cb9-5426-ba88-fe5843566938"
       },
@@ -603,7 +607,7 @@
         "typeFullFqn": "system.cards.markdown_card",
         "type": "latest",
         "sizeX": 24,
-        "sizeY": 3,
+        "sizeY": 2,
         "config": {
           "datasources": [
             {
@@ -642,12 +646,12 @@
           "padding": "0px",
           "settings": {
             "useMarkdownTextFunction": false,
-            "markdownTextPattern": "### ${entityName}\nCharts follow the dashboard's time window.",
+            "markdownTextPattern": "Type: ${Type}. Charts follow the dashboard's time window (top right).",
             "markdownTextFunction": "return '# Some title\\n - Entity name: ' + data[0]['entityName'];",
             "applyDefaultMarkdownStyle": true,
-            "markdownCss": ""
+            "markdownCss": ".tb-markdown-view { overflow: hidden !important; height: 100%; display: flex; align-items: center; padding: 0 5px !important; }"
           },
-          "title": "Selected asset",
+          "title": "${entityName}",
           "showTitleIcon": false,
           "iconColor": "rgba(0, 0, 0, 0.87)",
           "iconSize": "24px",
@@ -656,8 +660,8 @@
           "enableFullscreen": true,
           "widgetStyle": {},
           "titleStyle": {
-            "fontSize": "16px",
-            "fontWeight": 400
+            "fontSize": "20px",
+            "fontWeight": 500
           },
           "showLegend": false,
           "useDashboardTimewindow": true,
@@ -667,13 +671,8 @@
               {
                 "name": "Back to all assets",
                 "icon": "arrow_back",
-                "type": "openDashboardState",
-                "targetDashboardStateId": "default",
-                "setEntityId": false,
-                "stateEntityParamName": null,
-                "openRightLayout": false,
-                "openInSeparateDialog": false,
-                "openInPopover": false,
+                "type": "custom",
+                "customFunction": "widgetContext.stateController.resetState();",
                 "showIcon": true,
                 "buttonType": "stroked",
                 "id": "ed9644bf-4f78-521c-ae5f-25c040001d88"
@@ -1876,32 +1875,32 @@
             "widgets": {
               "4597a42c-d0c6-5ef4-a64c-77d3ce13c477": {
                 "sizeX": 24,
-                "sizeY": 3,
+                "sizeY": 2,
                 "row": 0,
                 "col": 0
               },
               "0b7cd661-121b-5920-a314-e33f4f01b009": {
                 "sizeX": 12,
                 "sizeY": 6,
-                "row": 3,
+                "row": 2,
                 "col": 0
               },
               "e49b7c52-4ba1-511b-a614-0cca8fba5005": {
                 "sizeX": 12,
                 "sizeY": 6,
-                "row": 3,
+                "row": 2,
                 "col": 12
               },
               "9694562c-8e1b-51d3-9209-eb4542d0d576": {
                 "sizeX": 12,
                 "sizeY": 6,
-                "row": 9,
+                "row": 8,
                 "col": 0
               },
               "79f1b33e-0c37-5ebb-8ed5-5aa3d0ebcf59": {
                 "sizeX": 12,
                 "sizeY": 6,
-                "row": 9,
+                "row": 8,
                 "col": 12
               }
             },
@@ -1960,7 +1959,7 @@
     },
     "settings": {
       "stateControllerId": "entity",
-      "showTitle": true,
+      "showTitle": false,
       "showDashboardsSelect": false,
       "showEntitiesSelect": false,
       "showDashboardTimewindow": true,

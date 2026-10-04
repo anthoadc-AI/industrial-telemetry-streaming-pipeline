@@ -9,10 +9,13 @@ titles, alarm filters and the row-click action are set here. Asset types, channe
 from config/telemetry.yaml. No device is named: one alias selects devices by the asset types, the other is the
 entity a user selects. Ids are uuid5 of fixed names, so regenerating gives the same file.
 
-Content (owner review, Task 3.2): the plant view fits one 1920x1080 screen (the layout fills the window height):
-the five assets with their latest values, no scrolling or paging, beside the counters of active critical and
-warning alarms, and the table of active alarms below. A row click opens the asset view: a header with the
-asset's name and a "Back to all assets" button, and one time-series chart per channel titled with the asset.
+Content (owner review, Task 3.2): the plant view fits one 1920x1080 screen (the layout fills the window height),
+in dashboard fullscreen and in a maximized window with ThingsBoard's side menu, also at 125 % display scaling
+(about 1536x730 CSS pixels; measured in headless Edge): the five assets with their latest values, no scrolling
+or paging, beside the counters of active critical and warning alarms, and the table of active alarms below, its
+type and status on one line. No dashboard title: the toolbar's breadcrumb names the view. A row click opens the
+asset view: a header with the asset's name and a "Back to all assets" button, which returns to the plant view
+without stacking states, and one time-series chart per channel titled with the asset.
 The alarms table cannot clear an alarm: the pipeline's alarm consumer is the only alarm engine, so a manual
 clear would leave ThingsBoard and the pipeline disagreeing. Acknowledging and assigning stay: they annotate an
 alarm without changing its state. Its time column is the alarm's start time, the event's own timestamp
@@ -38,6 +41,10 @@ FQNS = ("system.time_series_chart", "system.cards.entities_table", "system.alarm
         "system.alarm_count", "system.cards.markdown_card")
 # How a unit in config/telemetry.yaml is written on screen; units not listed are shown as they are.
 UNIT_DISPLAY = {"degC": "°C"}
+# Table rows of 36 px instead of 52: the five assets and several alarms fit one screen also at 125 % display
+# scaling (a maximized window on a 1920x1080 screen shows about 1536x730 CSS pixels with ThingsBoard's menu).
+COMPACT_ROWS = (".mat-mdc-header-row { height: 40px !important; min-height: 40px; }\n"
+                ".mat-mdc-row { height: 36px !important; min-height: 36px; }")
 COLORS = ["#2196f3", "#4caf50", "#f44336", "#ff9800", "#9c27b0"]
 NS = uuid.UUID("6f0e2c1a-3b7d-4c55-9a51-0d2f6a7c9e10")
 
@@ -86,6 +93,7 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
                                         "id": uid("action-open-asset")}]}})
     c["settings"] = {**c["settings"], "entitiesTitle": "Assets", "defaultSortOrder": "name", "displayPagination": False,
                      "defaultPageSize": 10}
+    c["widgetCss"] = COMPACT_ROWS
     place("default", "system.cards.entities_table", "w-assets", c, (18, 8), 0, 0)
 
     for i, sev in enumerate(("CRITICAL", "WARNING")):
@@ -100,7 +108,11 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
         place("default", "system.alarm_count", f"w-count-{sev}", c, (6, 4), i * 4, 18)
 
     c = copy.deepcopy(defaults["system.alarm_widgets.alarms_table"]["defaultConfig"])
-    alarm_keys = [k for k in c["alarmSource"]["dataKeys"] if k["name"] != "createdTime"]
+    # Widths that keep the longest type ("Bearing temperature high (critical)") and status ("Active Unacknowledged")
+    # on one line at 1536 px.
+    widths = {"type": "240px", "status": "190px"}
+    alarm_keys = [{**k, "settings": {**k.get("settings", {}), "columnWidth": widths[k["name"]]}} if k["name"] in widths else k
+                  for k in c["alarmSource"]["dataKeys"] if k["name"] != "createdTime"]
     start = {**next(k for k in c["alarmSource"]["dataKeys"] if k["name"] == "createdTime"),
              "name": "startTime", "label": "Start time (event)"}
     c["alarmSource"] = {**c["alarmSource"], "type": "entity", "name": "", "entityAliasId": assets, "filterId": None,
@@ -110,30 +122,36 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
     # The table filters alarms by time; its default (one day) would hide an alarm active for longer.
     c["timewindow"] = {**c["timewindow"], "realtime": {**c["timewindow"]["realtime"], "timewindowMs": 30 * 86_400_000}}
     c.update({"title": "Active alarms", "showTitle": True, "alarmStatusList": ["ACTIVE"], "alarmSeverityList": [],
-              "alarmTypeList": [], "searchPropagatedAlarms": False})
+              "alarmTypeList": [], "searchPropagatedAlarms": False, "displayTimewindow": False, "widgetCss": COMPACT_ROWS})
     if c.get("alarmFilterConfig"):
         c["alarmFilterConfig"] = {**c["alarmFilterConfig"], "statusList": ["ACTIVE"]}
     place("default", "system.alarm_widgets.alarms_table", "w-alarms", c, (24, 8), 8, 0)
 
     c = copy.deepcopy(defaults["system.cards.markdown_card"]["defaultConfig"])
-    c.update({"title": "Selected asset", "showTitle": True,
+    # The header: the asset's name as the title, the way back, one line of text, no scrolling. "Back" resets the
+    # state stack to the plant view; opening the default state would push it ("Pipeline operations > pump-01 >
+    # Pipeline operations").
+    c.update({"title": "${entityName}", "showTitle": True, "titleStyle": {"fontSize": "20px", "fontWeight": 500},
               "datasources": [{"type": "entity", "name": "", "entityAliasId": selected, "filterId": None,
                                "dataKeys": [_key("name", "entityField", "Asset", 0), _key("type", "entityField", "Type", 1)]}],
-              "actions": {"headerButton": [{"name": "Back to all assets", "icon": "arrow_back", "type": "openDashboardState",
-                                            "targetDashboardStateId": "default", "setEntityId": False,
-                                            "stateEntityParamName": None, "openRightLayout": False,
-                                            "openInSeparateDialog": False, "openInPopover": False,
+              "actions": {"headerButton": [{"name": "Back to all assets", "icon": "arrow_back", "type": "custom",
+                                            "customFunction": "widgetContext.stateController.resetState();",
                                             "showIcon": True, "buttonType": "stroked", "id": uid("action-back")}]}})
+    # The row height scales with the window: the line is centred in whatever height the header gets, never
+    # scrolled. ThingsBoard scopes this CSS to the widget's own elements, so it styles the container only (the
+    # paragraph rendered from the markdown is not reached).
     c["settings"] = {**c["settings"], "useMarkdownTextFunction": False,
-                     "markdownTextPattern": "### ${entityName}\nCharts follow the dashboard's time window."}
-    place("asset", "system.cards.markdown_card", "w-asset-header", c, (24, 3), 0, 0)
+                     "markdownTextPattern": "Type: ${Type}. Charts follow the dashboard's time window (top right).",
+                     "markdownCss": ".tb-markdown-view { overflow: hidden !important; height: 100%; display: flex;"
+                                    " align-items: center; padding: 0 5px !important; }"}
+    place("asset", "system.cards.markdown_card", "w-asset-header", c, (24, 2), 0, 0)
 
     for i, ch in enumerate(channels):
         c = copy.deepcopy(defaults["system.time_series_chart"]["defaultConfig"])
         c.update({"title": "${entityName}: " + LABELS[ch], "showTitle": True, "useDashboardTimewindow": True,
                   "datasources": [{"type": "entity", "name": "", "entityAliasId": selected, "filterId": None,
                                    "dataKeys": [_key(ch, "timeseries", LABELS[ch], i)]}]})
-        place("asset", "system.time_series_chart", f"w-chart-{ch}", c, (12, 6), 3 + (i // 2) * 6, (i % 2) * 12)
+        place("asset", "system.time_series_chart", f"w-chart-{ch}", c, (12, 6), 2 + (i // 2) * 6, (i % 2) * 12)
 
     # autoFillHeight: rows stretch so the whole layout fits the window height (1920x1080 included).
     grid = {"backgroundColor": "#eeeeee", "columns": 24, "margin": 10, "outerMargin": True, "backgroundSizeMode": "100%",
@@ -155,7 +173,8 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
             "timewindow": {"displayValue": "", "selectedTab": 0,
                            "realtime": {"realtimeType": 0, "interval": 5000, "timewindowMs": 1800000},
                            "aggregation": {"type": "NONE", "limit": 50000}},
-            "settings": {"stateControllerId": "entity", "showTitle": True, "showDashboardsSelect": False,
+            # No dashboard title: the toolbar's state breadcrumb already names the view, and the height is the table's.
+            "settings": {"stateControllerId": "entity", "showTitle": False, "showDashboardsSelect": False,
                          "showEntitiesSelect": False, "showDashboardTimewindow": True, "showDashboardExport": False,
                          "toolbarAlwaysOpen": True},
         },
