@@ -619,7 +619,7 @@
                 {
                   "name": "alarm_mapping_failed",
                   "type": "timeseries",
-                  "label": "Alarm mapping failures, this month",
+                  "label": "Alarm mapping failures, current month",
                   "color": "#2196f3",
                   "settings": {},
                   "_hash": 0.1,
@@ -710,7 +710,7 @@
             },
             "autoScale": true
           },
-          "title": "Alarm mapping failures, this month",
+          "title": "Alarm mapping failures, current month",
           "dropShadow": true,
           "enableFullscreen": false,
           "titleStyle": {

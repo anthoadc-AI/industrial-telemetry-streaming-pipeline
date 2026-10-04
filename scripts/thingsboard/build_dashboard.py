@@ -13,7 +13,7 @@ Content (owner review, Task 3.2; counter of mapping failures added in the Task 3
 1920x1080 screen (the layout fills the window height),
 in dashboard fullscreen and in a maximized window with ThingsBoard's side menu, also at 125 % display scaling
 (about 1536x730 CSS pixels; measured in headless Edge): the five assets with their latest values, no scrolling
-or paging, beside the counters of active critical and warning alarms and of alarm mapping failures this month,
+or paging, beside the counters of active critical and warning alarms and of alarm mapping failures in the current month,
 and the table of active alarms below, its
 type and status on one line. No dashboard title: the toolbar's breadcrumb names the view. A row click opens the
 asset view: a header with the asset's name and a "Back to all assets" button, which returns to the plant view
@@ -143,7 +143,7 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
     # messages ThingsBoard dropped was not built: its statistics entity cannot be selected reliably; the
     # integration session checks the drops in ThingsBoard's log instead.)
     c = copy.deepcopy(defaults["system.cards.horizontal_value_card"]["defaultConfig"])
-    label = "Alarm mapping failures, this month"
+    label = "Alarm mapping failures, current month"
     c.update({"title": label, "showTitle": False, "useDashboardTimewindow": False,
               "displayTimewindow": False, "units": "", "decimals": 0,
               "timewindow": {"selectedTab": 0,
