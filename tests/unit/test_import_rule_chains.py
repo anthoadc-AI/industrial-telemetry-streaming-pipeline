@@ -111,12 +111,32 @@ def test_every_connection_is_valid_after_pruning():
         assert all(0 <= c["fromIndex"] < n and 0 <= c["toIndex"] < n for c in md["connections"])
 
 
+def test_every_alarm_mapping_failure_is_recorded_on_the_gateway_and_ends_the_message():
+    """Owner decision (Task 3.2 fix): a node that fails sends the message to its Failure branch, which records
+    alarm_mapping_failed on the pipeline gateway (server time) and ends normally, so the queue never retries a
+    message that would always fail and the asset's next messages are not held back. Debug: failures only."""
+    md = json.loads((irc.RULE_CHAIN_DIR / "alarm-mapping.json").read_text(encoding="utf-8"))["metadata"]
+    names = [n["name"] for n in md["nodes"]]
+    describe, to_gateway, save = (names.index(n) for n in ("Describe mapping failure", "To the pipeline gateway",
+                                                            "Save mapping failure"))
+    failures = {c["fromIndex"]: c["toIndex"] for c in md["connections"] if c["type"] == "Failure"}
+    assert failures == {i: describe for i in range(describe)}  # every mapping node, nothing else
+    tail = {(c["fromIndex"], c["toIndex"]) for c in md["connections"] if c["type"] == "Success" and c["fromIndex"] >= describe}
+    assert tail == {(describe, to_gateway), (to_gateway, save)}
+    gw = md["nodes"][to_gateway]["configuration"]
+    assert (gw["originatorSource"], gw["entityType"], gw["entityNamePattern"]) == ("ENTITY", "DEVICE", irc.PIPELINE_GATEWAY)
+    assert md["nodes"][save]["configuration"]["useServerTs"] is True  # two failures of one event never overwrite
+    assert "alarm_mapping_failed" in md["nodes"][describe]["configuration"]["tbelScript"]
+    assert all(n["debugSettings"] == {"failuresEnabled": True, "allEnabled": False, "allEnabledUntil": 0} for n in md["nodes"])
+
+
 def test_alarm_mapping_evaluates_no_threshold():
     """One alarm engine (Task 3.2): AlarmMapping only maps and deduplicates; its nodes are the expected ones."""
     md = json.loads((irc.RULE_CHAIN_DIR / "alarm-mapping.json").read_text(encoding="utf-8"))["metadata"]
     kinds = [n["type"].rsplit(".", 1)[1] for n in md["nodes"]]
     assert kinds == ["TbGetAttributesNode", "TbTransformMsgNode", "TbJsSwitchNode", "TbCreateAlarmNode",
-                     "TbClearAlarmNode", "TbTransformMsgNode", "TbMsgAttributesNode"]
+                     "TbClearAlarmNode", "TbTransformMsgNode", "TbMsgAttributesNode",
+                     "TbTransformMsgNode", "TbChangeOriginatorNode", "TbMsgTimeseriesNode"]
     scripts = " ".join(str(n["configuration"].get("tbelScript", "")) for n in md["nodes"])
     for channel in ("bearing_temperature_c", "vibration_rms_mm_s", "motor_current_a", "speed_rpm", "temperature"):
         assert f"msg.{channel}" not in scripts
@@ -372,17 +392,53 @@ def test_an_unresolved_firebase_node_stops_the_import(monkeypatch):
         irc.import_chains(FakeThingsBoard(), None)
 
 
-def test_device_profiles_are_created_on_the_sequential_queue(json_log):
-    tb = FakeThingsBoard(profiles=[{"name": "pump", "id": {"id": "p"}, "defaultQueueName": "Main"},
-                                   {"name": "motor", "id": {"id": "m"}, "defaultQueueName": "SequentialByOriginator"}])
+def test_device_profiles_are_created_on_the_pipeline_queue(json_log):
+    tb = FakeThingsBoard(profiles=[{"name": "pump", "id": {"id": "p"}, "defaultQueueName": "SequentialByOriginator"},
+                                   {"name": "motor", "id": {"id": "m"}, "defaultQueueName": "PipelineSequential"}])
     irc.ensure_device_profiles(tb, ["compressor", "motor", "pump"])
     assert {n: p["defaultQueueName"] for n, p in tb.profiles.items()} == dict.fromkeys(["pump", "motor", "compressor"],
-                                                                                         "SequentialByOriginator")
+                                                                                         "PipelineSequential")
     created = tb.profiles["compressor"]
     assert created["default"] is False and created["defaultRuleChainId"] is None and "id" not in \
         next(c[2] for c in tb.calls if c[0] == "POST" and c[2]["name"] == "compressor")
     assert [e["event"] for e in json_log() if e["event"].startswith("device_profile")] == \
         ["device_profile_created", "device_profile_ok", "device_profile_updated"]
+
+
+class FakeQueues(irc.ThingsBoard):
+    """The system administrator's view of the rule-engine queues."""
+
+    def __init__(self, queues=()):
+        super().__init__("http://fake")
+        self.queues = {q["name"]: q for q in queues}
+        self.calls = []
+
+    def request(self, method, path, body=None, query=None, allow_404=False):
+        self.calls.append((method, path, body, query))
+        assert path == "/api/queues" and query["serviceType"] == "TB_RULE_ENGINE"
+        if method == "GET":
+            return {"data": list(self.queues.values()), "hasNext": False}
+        self.queues[body["name"]] = {**body, "id": body.get("id") or {"id": "q-new"}}
+        return self.queues[body["name"]]
+
+
+def test_pipeline_queue_is_created_then_kept_then_corrected(json_log):
+    """Owner decision (Task 3.2 fix): 60 s per batch, 20 retries from 5 s up to 60 s, never dropped at the first timeout."""
+    tb = FakeQueues([{"name": "SequentialByOriginator", "id": {"id": "s"}}])
+    irc.ensure_pipeline_queue(tb)
+    q = tb.queues["PipelineSequential"]
+    assert q["submitStrategy"]["type"] == "SEQUENTIAL_BY_ORIGINATOR" and q["packProcessingTimeout"] == 60_000
+    assert q["processingStrategy"] == {"type": "RETRY_FAILED_AND_TIMED_OUT", "retries": 20, "failurePercentage": 0.0,
+                                       "pauseBetweenRetries": 5, "maxPauseBetweenRetries": 60}
+    irc.ensure_pipeline_queue(tb)  # unchanged: nothing written
+    tb.queues["PipelineSequential"]["packProcessingTimeout"] = 2000  # changed by hand in the UI
+    irc.ensure_pipeline_queue(tb)
+    assert tb.queues["PipelineSequential"]["packProcessingTimeout"] == 60_000
+    assert tb.queues["PipelineSequential"]["id"] == {"id": "q-new"}  # updated in place, same queue
+    assert [c[0] for c in tb.calls] == ["GET", "POST", "GET", "GET", "POST"]
+    events = [e for e in json_log() if e["event"].startswith("queue_")]
+    assert [e["event"] for e in events] == ["queue_created", "queue_ok", "queue_updated"]
+    assert events[2]["settings"] == ["packProcessingTimeout"]
 
 
 def test_the_gateway_device_is_created_and_flagged(json_log):
@@ -410,17 +466,20 @@ def test_dashboard_is_created_then_updated_by_title(json_log, tmp_path):
     assert [e["action"] for e in json_log() if e["event"] == "dashboard_written"] == ["create", "update"]
 
 
-def test_the_committed_dashboard_names_no_device_and_selects_the_configured_types(cfg):
+def test_the_committed_dashboard_names_no_asset_and_selects_the_configured_types(cfg):
+    """Assets are selected by type; the one device named is the pipeline gateway, where mapping failures are counted."""
     text = irc.DASHBOARD_FILE.read_text(encoding="utf-8")
     dashboard = json.loads(text)
-    assert '"entityType": "DEVICE"' not in text and '"singleEntity"' not in text
+    assert '"singleEntity"' not in text and not any(a.id in text for a in cfg.telemetry.assets)
     filters = [a["filter"] for a in dashboard["configuration"]["entityAliases"].values()]
     by_type = next(f for f in filters if f["type"] == "deviceType")
     assert sorted(by_type["deviceTypes"]) == sorted({a.type for a in cfg.telemetry.assets})
-    assert {f["type"] for f in filters} == {"deviceType", "stateEntity"}
+    assert {f["type"] for f in filters} == {"deviceType", "stateEntity", "entityName"}
+    [named] = [f for f in filters if f["type"] == "entityName"]
+    assert (named["entityType"], named["entityNameFilter"]) == ("DEVICE", irc.PIPELINE_GATEWAY)
     keys = {k["name"] for w in dashboard["configuration"]["widgets"].values()
             for d in (w["config"].get("datasources") or []) for k in d["dataKeys"] if k["type"] == "timeseries"}
-    assert keys == set(cfg.telemetry.channels)
+    assert keys == set(cfg.telemetry.channels) | {"alarm_mapping_failed"}
 
 
 def test_duplicate_chain_names_stop_the_import():
@@ -642,3 +701,42 @@ def test_an_alarm_whose_latest_record_is_undecodable_is_kept():
     irc.reconcile_alarms(tb, ["pump"], {GHOST: irc.UNKNOWN, LIVE: "RAISED", PENDING: "RAISED"}, "telemetry.alarms")
     assert [a["status"] for a in tb.devices["pump-01"]["alarms"][:2]] == ["ACTIVE_UNACK", "ACTIVE_UNACK"]
     assert tb.devices["pump-01"]["alarm_last"][WARNING_TYPE]["state"] == "RAISED"
+
+
+class FakeDevices(irc.ThingsBoard):
+    """Devices by name; a device written with a type gets the profile of that name, as ThingsBoard does."""
+
+    def __init__(self, devices=()):
+        super().__init__("http://fake")
+        self.devices = {d["name"]: d for d in devices}
+        self.calls = []
+
+    def request(self, method, path, body=None, query=None, allow_404=False):
+        self.calls.append((method, path, body))
+        assert path in ("/api/tenant/devices", "/api/device")
+        if method == "GET":
+            return self.devices.get(query["deviceName"])
+        assert "deviceProfileId" not in body  # left for ThingsBoard to resolve from the type
+        saved = {**body, "id": body.get("id") or {"id": f"dev-{body['name']}"},
+                 "deviceProfileId": {"id": f"profile-{body['type']}"}}
+        self.devices[body["name"]] = saved
+        return saved
+
+
+def test_asset_devices_are_created_with_their_type_and_retyped_if_wrong(json_log):
+    """Hardening after CI run 37215619234: a device first created without a type got the default profile (Main
+    queue). The import creates every configured asset's device with its type, corrects a wrong one, idempotently."""
+    tb = FakeDevices([{"name": "pump-01", "type": "pump", "id": {"id": "p1"}, "deviceProfileId": {"id": "profile-pump"}},
+                      {"name": "motor-01", "type": "default", "id": {"id": "m1"}, "deviceProfileId": {"id": "profile-default"},
+                       "label": "kept"}])
+    assets = [("pump-01", "pump"), ("motor-01", "motor"), ("compressor-01", "compressor")]
+    irc.ensure_asset_devices(tb, assets)
+    assert {n: (d["type"], d["deviceProfileId"]["id"]) for n, d in tb.devices.items()} == {
+        "pump-01": ("pump", "profile-pump"), "motor-01": ("motor", "profile-motor"),
+        "compressor-01": ("compressor", "profile-compressor")}
+    assert tb.devices["motor-01"]["id"] == {"id": "m1"} and tb.devices["motor-01"]["label"] == "kept"  # same device, updated
+    assert [e["event"] for e in json_log() if e["event"].startswith("asset_device")] == \
+        ["asset_device_ok", "asset_device_retyped", "asset_device_created"]
+    writes = len([c for c in tb.calls if c[0] == "POST"])
+    irc.ensure_asset_devices(tb, assets)  # again: nothing to write
+    assert len([c for c in tb.calls if c[0] == "POST"]) == writes

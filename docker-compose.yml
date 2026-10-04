@@ -135,6 +135,21 @@ services:
       # (50 msg/s through the sink), 157 MB live after a full GC. 1 GB is about
       # six times the live set and above the observed working size.
       JAVA_OPTS: "-Xmx1g"
+      # How long ThingsBoard waits to fill a batch before writing time series,
+      # latest values and attributes to Postgres (defaults 100, 50, 50 ms). A
+      # rule node that saves data waits for that write, and the pipeline
+      # devices' messages are processed one at a time per device
+      # (PipelineSequential queue), so these delays set an asset's capacity.
+      # Measured on 2026-10-04, one asset, alarm events (the most expensive
+      # message): 6.9 msg/s with the defaults, 20.2 msg/s at 25 ms, with no
+      # measurable CPU difference at 20 msg/s (owner decision: 25 ms).
+      # COUPLED with config/thingsboard.yaml (sink.max_messages_per_s_per_asset,
+      # 10 = about half of 20.2): with the defaults that limit must be 3.
+      # test_a_backlog_of_one_asset_reaches_thingsboard_without_a_drop fails if
+      # the pair stops being safe.
+      SQL_TS_BATCH_MAX_DELAY_MS: "25"
+      SQL_TS_LATEST_BATCH_MAX_DELAY_MS: "25"
+      SQL_ATTRIBUTES_BATCH_MAX_DELAY_MS: "25"
     # Named volumes, never the coursework's ~/.mytb-data bind mount. On the
     # first start with an empty volume, the image installs its database with
     # demo data, which includes the tenant account used by the import script.

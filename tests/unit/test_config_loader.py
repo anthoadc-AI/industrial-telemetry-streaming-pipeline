@@ -22,6 +22,7 @@ def test_real_configuration(cfg):
     t = cfg.telemetry
     assert [a.id for a in t.assets] == ["motor-01", "motor-02", "pump-01", "pump-02", "compressor-01"]
     assert list(t.channels) == ["bearing_temperature_c", "vibration_rms_mm_s", "motor_current_a", "speed_rpm"]
+    assert cfg.thingsboard.sink_max_messages_per_s_per_asset == 10  # coupled with the SQL delays in docker-compose.yml
     assert [c.label for c in t.channels.values()] == ["Bearing temperature", "Vibration RMS", "Motor current", "Speed"]
     assert set(t.faults) == {"bearing_overheating", "imbalance"}
     assert t.asset("pump-02").degradation == {"bearing_temperature_c": 1.5, "vibration_rms_mm_s": 0.6}
@@ -77,6 +78,14 @@ def broken(tmp_path: Path, file: str, old: str, new: str) -> Path:
 
 
 CASES = [
+    # thingsboard.yaml
+    ("thingsboard.yaml", "  max_messages_per_s_per_asset: 10", "  max_messages_per_s_per_asset: 0",
+     "thingsboard.yaml.sink.max_messages_per_s_per_asset: must be > 0"),
+    ("thingsboard.yaml", "  max_messages_per_s_per_asset: 10", "  max_messages_per_s_per_asset: fast",
+     "thingsboard.yaml.sink.max_messages_per_s_per_asset: expected a finite number"),
+    ("thingsboard.yaml", "  max_messages_per_s_per_asset: 10", "  max_messages_per_s_per_asset: 10\n  burst: 5",
+     "thingsboard.yaml.sink: unknown key(s) ['burst']"),
+    ("thingsboard.yaml", "sink:", "other:", "thingsboard.yaml: missing key(s) ['sink']"),
     # telemetry.yaml
     ("telemetry.yaml", "    label: Vibration RMS\n", "",
      "telemetry.yaml.channels.vibration_rms_mm_s: missing key(s) ['label']"),

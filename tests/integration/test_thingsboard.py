@@ -52,7 +52,7 @@ def test_rule_chains_imported_and_linked(stack):
         refs[name] = sorted(by_id.get(n["configuration"]["ruleChainId"], "UNRESOLVED")
                             for n in md["nodes"] if n["type"].endswith("TbRuleChainInputNode"))
         rest += sum(n["type"].endswith("TbRestApiCallNode") for n in md["nodes"])
-    assert counts == {"AlarmMapping": (7, 9), "Root Rule Chain": (8, 7)}
+    assert counts == {"AlarmMapping": (10, 18), "Root Rule Chain": (8, 7)}
     assert refs == {"AlarmMapping": [], "Root Rule Chain": ["AlarmMapping"]}
     assert rest == 0
 
@@ -62,7 +62,7 @@ def test_profiles_gateway_and_dashboard_imported(stack):
     types = sorted({a.type for a in load_config(env={}).telemetry.assets})
     for name in types:
         profile = irc.find_device_profile(tb, name)
-        assert profile and profile["defaultQueueName"] == "SequentialByOriginator", name
+        assert profile and profile["defaultQueueName"] == irc.ALARM_QUEUE == "PipelineSequential", name
     gateway = tb.request("GET", "/api/tenant/devices", query={"deviceName": irc.PIPELINE_GATEWAY})
     assert gateway["additionalInfo"]["gateway"] is True
     dashboards = tb.request("GET", "/api/tenant/dashboards",

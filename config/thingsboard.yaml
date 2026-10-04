@@ -1,0 +1,20 @@
+# The path from Kafka to ThingsBoard: the ThingsBoard sink (Task 3.2).
+sink:
+  # Messages per second the sink sends to ThingsBoard for one asset,
+  # telemetry and alarm events together; a token bucket per asset that holds
+  # one second of messages, so at most this many go out at once.
+  #
+  # Every message of an asset goes through ThingsBoard's PipelineSequential
+  # queue one at a time, so an asset is processed no faster than one message's
+  # cost allows. Measured on 2026-10-04 (ThingsBoard 4.2.1.1, one asset, alarm
+  # events, the most expensive message): 20.2 msg/s with the SQL batch delays
+  # at 25 ms, as docker-compose.yml sets them; 6.9 msg/s with ThingsBoard's
+  # defaults (100/50/50 ms). 10 is about half of 20.2. Live, an asset sends
+  # 1 msg/s and never waits; after a ThingsBoard outage the backlog drains at
+  # this rate per asset.
+  #
+  # COUPLED with SQL_*_BATCH_MAX_DELAY_MS in docker-compose.yml: with
+  # ThingsBoard's default delays this must be 3. Change both together;
+  # test_a_backlog_of_one_asset_reaches_thingsboard_without_a_drop fails if
+  # the pair stops being safe.
+  max_messages_per_s_per_asset: 10

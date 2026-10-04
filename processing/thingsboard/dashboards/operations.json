@@ -135,7 +135,7 @@
         "typeFullFqn": "system.alarm_count",
         "type": "latest",
         "sizeX": 6,
-        "sizeY": 4,
+        "sizeY": 3,
         "config": {
           "datasources": [
             {
@@ -296,7 +296,7 @@
         "typeFullFqn": "system.alarm_count",
         "type": "latest",
         "sizeX": 6,
-        "sizeY": 4,
+        "sizeY": 3,
         "config": {
           "datasources": [
             {
@@ -602,6 +602,164 @@
           "widgetCss": ".mat-mdc-header-row { height: 40px !important; min-height: 40px; }\n.mat-mdc-row { height: 36px !important; min-height: 36px; }"
         },
         "id": "5eaa985d-4cb9-5426-ba88-fe5843566938"
+      },
+      "61c1390c-2565-5748-b79d-0959b133925a": {
+        "typeFullFqn": "system.cards.horizontal_value_card",
+        "type": "latest",
+        "sizeX": 6,
+        "sizeY": 2,
+        "config": {
+          "datasources": [
+            {
+              "type": "entity",
+              "name": "",
+              "entityAliasId": "a1f0c33a-9e13-5445-97bd-efcddd689c05",
+              "filterId": null,
+              "dataKeys": [
+                {
+                  "name": "alarm_mapping_failed",
+                  "type": "timeseries",
+                  "label": "Alarm mapping failures, current month",
+                  "color": "#2196f3",
+                  "settings": {},
+                  "_hash": 0.1,
+                  "aggregationType": "COUNT"
+                }
+              ]
+            }
+          ],
+          "timewindow": {
+            "selectedTab": 0,
+            "realtime": {
+              "realtimeType": 1,
+              "quickInterval": "CURRENT_MONTH",
+              "interval": 60000
+            },
+            "aggregation": {
+              "type": "NONE",
+              "limit": 50000
+            }
+          },
+          "showTitle": false,
+          "backgroundColor": "rgba(0, 0, 0, 0)",
+          "color": "rgba(0, 0, 0, 0.87)",
+          "padding": "0px",
+          "settings": {
+            "labelPosition": "top",
+            "layout": "horizontal",
+            "showLabel": true,
+            "labelFont": {
+              "family": "Roboto",
+              "size": 16,
+              "sizeUnit": "px",
+              "style": "normal",
+              "weight": "500"
+            },
+            "labelColor": {
+              "type": "constant",
+              "color": "rgba(0, 0, 0, 0.87)",
+              "colorFunction": "var temperature = value;\nif (typeof temperature !== undefined) {\n  var percent = (temperature + 60)/120 * 100;\n  return tinycolor.mix('blue', 'red', percent).toHexString();\n}\nreturn 'blue';"
+            },
+            "showIcon": true,
+            "iconSize": 40,
+            "iconSizeUnit": "px",
+            "icon": "report_problem",
+            "iconColor": {
+              "type": "constant",
+              "color": "#757575",
+              "colorFunction": "var temperature = value;\nif (typeof temperature !== undefined) {\n  var percent = (temperature + 60)/120 * 100;\n  return tinycolor.mix('blue', 'red', percent).toHexString();\n}\nreturn 'blue';"
+            },
+            "valueFont": {
+              "size": 36,
+              "sizeUnit": "px",
+              "family": "Roboto",
+              "weight": "500",
+              "style": "normal"
+            },
+            "valueColor": {
+              "type": "constant",
+              "color": "rgba(0, 0, 0, 0.87)",
+              "colorFunction": "var temperature = value;\nif (typeof temperature !== undefined) {\n  var percent = (temperature + 60)/120 * 100;\n  return tinycolor.mix('blue', 'red', percent).toHexString();\n}\nreturn 'blue';"
+            },
+            "showDate": false,
+            "dateFormat": {
+              "format": null,
+              "lastUpdateAgo": true,
+              "custom": false
+            },
+            "dateFont": {
+              "family": "Roboto",
+              "size": 12,
+              "sizeUnit": "px",
+              "style": "normal",
+              "weight": "500"
+            },
+            "dateColor": {
+              "type": "constant",
+              "color": "rgba(0, 0, 0, 0.38)",
+              "colorFunction": "var temperature = value;\nif (typeof temperature !== undefined) {\n  var percent = (temperature + 60)/120 * 100;\n  return tinycolor.mix('blue', 'red', percent).toHexString();\n}\nreturn 'blue';"
+            },
+            "background": {
+              "type": "color",
+              "color": "#fff",
+              "overlay": {
+                "enabled": false,
+                "color": "rgba(255,255,255,0.72)",
+                "blur": 3
+              }
+            },
+            "autoScale": true
+          },
+          "title": "Alarm mapping failures, current month",
+          "dropShadow": true,
+          "enableFullscreen": false,
+          "titleStyle": {
+            "fontSize": "16px",
+            "fontWeight": 400
+          },
+          "units": "",
+          "decimals": 0,
+          "useDashboardTimewindow": false,
+          "showLegend": false,
+          "widgetStyle": {},
+          "actions": {},
+          "configMode": "basic",
+          "displayTimewindow": false,
+          "margin": "0px",
+          "borderRadius": "0px",
+          "widgetCss": "",
+          "pageSize": 1024,
+          "noDataDisplayMessage": "",
+          "showTitleIcon": false,
+          "titleTooltip": "",
+          "titleFont": {
+            "size": 12,
+            "sizeUnit": "px",
+            "family": null,
+            "weight": null,
+            "style": null,
+            "lineHeight": "1.6"
+          },
+          "titleIcon": "",
+          "iconColor": "rgba(0, 0, 0, 0.87)",
+          "iconSize": "14px",
+          "timewindowStyle": {
+            "showIcon": true,
+            "iconSize": "14px",
+            "icon": "query_builder",
+            "iconPosition": "left",
+            "font": {
+              "size": 12,
+              "sizeUnit": "px",
+              "family": null,
+              "weight": null,
+              "style": null,
+              "lineHeight": "1"
+            },
+            "color": null
+          }
+        },
+        "id": "61c1390c-2565-5748-b79d-0959b133925a"
       },
       "4597a42c-d0c6-5ef4-a64c-77d3ce13c477": {
         "typeFullFqn": "system.cards.markdown_card",
@@ -1838,14 +1996,14 @@
               },
               "bdb40101-cbf2-55de-b919-a76f08c3b3f4": {
                 "sizeX": 6,
-                "sizeY": 4,
+                "sizeY": 3,
                 "row": 0,
                 "col": 18
               },
               "db7c395d-0707-55be-a00a-765a335728d0": {
                 "sizeX": 6,
-                "sizeY": 4,
-                "row": 4,
+                "sizeY": 3,
+                "row": 3,
                 "col": 18
               },
               "5eaa985d-4cb9-5426-ba88-fe5843566938": {
@@ -1853,6 +2011,12 @@
                 "sizeY": 8,
                 "row": 8,
                 "col": 0
+              },
+              "61c1390c-2565-5748-b79d-0959b133925a": {
+                "sizeX": 6,
+                "sizeY": 2,
+                "row": 6,
+                "col": 18
               }
             },
             "gridSettings": {
@@ -1930,6 +2094,16 @@
             "pump"
           ],
           "deviceNameFilter": ""
+        }
+      },
+      "a1f0c33a-9e13-5445-97bd-efcddd689c05": {
+        "id": "a1f0c33a-9e13-5445-97bd-efcddd689c05",
+        "alias": "Pipeline gateway",
+        "filter": {
+          "type": "entityName",
+          "resolveMultiple": false,
+          "entityType": "DEVICE",
+          "entityNameFilter": "pipeline-gateway"
         }
       },
       "0d03d7c4-d30c-5304-8b22-f6c8c2339621": {

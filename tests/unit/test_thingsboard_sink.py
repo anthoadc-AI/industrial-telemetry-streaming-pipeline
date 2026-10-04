@@ -463,3 +463,82 @@ def test_signal_handlers_set_the_stop_event(json_log):
     finally:
         for n, h in saved.items():
             signal.signal(getattr(signal, n), h)
+
+
+# --- rate limit per asset (config/thingsboard.yaml) ------------------------------------------------------------
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_the_limiter_lets_one_second_of_messages_through_then_paces_at_the_rate():
+    clock = Clock()
+    limiter = ts.AssetRateLimiter(10, clock)
+    assert limiter.burst == 10  # one second of messages
+    assert [limiter.delay("pump-01") for _ in range(10)] == [0.0] * 10
+    # A backlog, all at once: each further message waits one more tenth of a second.
+    assert [round(limiter.delay("pump-01"), 3) for _ in range(3)] == [0.1, 0.2, 0.3]
+    clock.now += 0.3  # the caller waited: the tokens taken in advance are paid back, nothing more
+    assert round(limiter.delay("pump-01"), 3) == 0.1
+    clock.now += 0.1
+    # Steady state after the backlog: exactly the rate, never faster.
+    waits = []
+    for _ in range(50):
+        w = limiter.delay("pump-01")
+        waits.append(w)
+        clock.now += w
+    assert waits[0] == pytest.approx(0.1) and all(w == pytest.approx(0.1) for w in waits)
+
+
+def test_assets_have_their_own_buckets_and_a_quiet_asset_refills_only_to_the_burst():
+    clock = Clock()
+    limiter = ts.AssetRateLimiter(10, clock)
+    for _ in range(10):
+        limiter.delay("pump-01")
+    assert limiter.delay("pump-02") == 0.0  # another asset is not slowed by pump-01's backlog
+    clock.now += 3600  # an hour quiet: still one second of messages, not an hour's worth
+    assert [limiter.delay("pump-01") for _ in range(11)][-1] == pytest.approx(0.1)
+
+
+def test_live_traffic_never_waits():
+    """1 message per second per asset, as the simulator sends: far below the limit, no delay ever."""
+    clock = Clock()
+    limiter = ts.AssetRateLimiter(10, clock)
+    for _ in range(600):
+        assert limiter.delay("pump-01") == 0.0
+        clock.now += 1.0
+
+
+def test_a_rate_below_one_keeps_a_burst_of_one():
+    clock = Clock()
+    limiter = ts.AssetRateLimiter(0.5, clock)
+    assert (limiter.burst, limiter.delay("a"), limiter.delay("a")) == (1.0, 0.0, 2.0)
+    with pytest.raises(ValueError):
+        ts.AssetRateLimiter(0)
+
+
+def test_the_sink_paces_with_the_configured_rate(sink, registry):
+    assert sink.limiter.rate == 10  # config/thingsboard.yaml
+    clock, waited = Clock(), []
+    sink.limiter = ts.AssetRateLimiter(10, clock)
+    sink.wait = lambda t: waited.append(round(t, 3)) or False
+    value = encode(registry, "telemetry.raw", "telemetry_v1.avsc", raw_record())
+    for _ in range(12):
+        sink.handle(Msg("telemetry.raw", value))
+    assert waited == [0.1, 0.2] and len(sink.gateway.sent) == 12
+    assert (sink.counts["rate_limited"], sink.counts["rate_limited_ms"]) == (2, 300)
+
+
+def test_a_stop_while_paced_leaves_the_offset_unstored(sink, registry):
+    sink.limiter = ts.AssetRateLimiter(1, Clock())
+    value = encode(registry, "telemetry.raw", "telemetry_v1.avsc", raw_record())
+    sink.consumer = FakeConsumer([Msg("telemetry.raw", value, offset=1), Msg("telemetry.raw", value, offset=2)])
+    stop = threading.Event()
+    stop.wait = lambda t=None: True  # a signal arrives while waiting for the rate limit
+    assert sink.run(stop) == "signal"
+    assert sink.consumer.stored == [1] and len(sink.gateway.sent) == 1  # the paced record was not sent nor stored

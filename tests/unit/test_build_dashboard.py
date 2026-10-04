@@ -23,6 +23,10 @@ DEFAULTS = {
     "system.alarm_count": {"type": "latest", "defaultConfig": {"datasources": [], "settings": {"label": "Total"}}},
     "system.cards.markdown_card": {"type": "latest",
                                    "defaultConfig": {"datasources": [], "settings": {"markdownTextPattern": "x"}}},
+    "system.cards.horizontal_value_card": {"type": "latest", "defaultConfig": {
+        "datasources": [], "units": "°C",
+        "settings": {"icon": "thermostat", "iconColor": {"type": "function", "color": "#5469FF"},
+                     "valueColor": {"type": "function", "color": "#000"}}}},
 }
 DEFAULTS["system.alarm_widgets.alarms_table"]["defaultConfig"].update({
     "alarmSource": {"type": "function", "dataKeys": [{"name": "createdTime", "type": "alarm", "label": "Created time"},
@@ -98,6 +102,25 @@ def test_charts_default_to_the_last_ten_minutes(cfg):
     assert charts and all(w["config"]["useDashboardTimewindow"] for w in charts)
 
 
+def test_alarm_mapping_failures_are_counted_on_the_pipeline_gateway(cfg):
+    """Owner decision (Task 3.2 fix): a counter, not an alarm. AlarmMapping records each failure on the gateway;
+    the card counts the entries of the current month (an aggregating card takes only calendar intervals)."""
+    d = bd.build(DEFAULTS, cfg.telemetry)
+    [card] = widgets_of(d, "system.cards.horizontal_value_card")
+    [key] = card["config"]["datasources"][0]["dataKeys"]
+    assert (key["name"], key["type"], key["aggregationType"]) == ("alarm_mapping_failed", "timeseries", "COUNT")
+    alias = d["configuration"]["entityAliases"][card["config"]["datasources"][0]["entityAliasId"]]["filter"]
+    assert (alias["type"], alias["entityType"], alias["entityNameFilter"]) == ("entityName", "DEVICE", "pipeline-gateway")
+    window = card["config"]["timewindow"]["realtime"]
+    assert card["config"]["useDashboardTimewindow"] is False
+    assert (window["realtimeType"], window["quickInterval"]) == (1, "CURRENT_MONTH")
+    assert (card["config"]["units"], card["config"]["settings"]["valueColor"]["type"]) == ("", "constant")
+    main = d["configuration"]["states"]["default"]["layouts"]["main"]["widgets"]
+    counts = sorted((main[w["id"]]["row"], main[w["id"]]["sizeY"]) for w in widgets_of(d, "system.alarm_count"))
+    place = main[card["id"]]
+    assert counts == [(0, 3), (3, 3)] and (place["row"], place["sizeY"], place["col"]) == (6, 2, 18)
+
+
 def test_plant_view_fits_one_screen_and_shows_every_asset(cfg):
     d = bd.build(DEFAULTS, cfg.telemetry)
     main = d["configuration"]["states"]["default"]["layouts"]["main"]
@@ -126,3 +149,12 @@ def test_asset_view_names_the_asset_and_offers_a_way_back(cfg):
     charts = widgets_of(d, "system.time_series_chart")
     assert len(charts) == len(cfg.telemetry.channels) and all(c["config"]["title"].startswith("${entityName}: ") for c in charts)
     assert header["id"] in d["configuration"]["states"]["asset"]["layouts"]["main"]["widgets"]
+
+
+def test_the_gateway_name_matches_the_import_script():
+    import importlib.util
+    path = REPO_ROOT / "scripts" / "thingsboard" / "import_rule_chains.py"
+    spec = importlib.util.spec_from_file_location("irc_for_dashboard", path)
+    irc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(irc)
+    assert bd.PIPELINE_GATEWAY == irc.PIPELINE_GATEWAY

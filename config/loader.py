@@ -176,10 +176,16 @@ class TopicsConfig:
 
 
 @dataclass(frozen=True)
+class ThingsBoardConfig:
+    sink_max_messages_per_s_per_asset: float  # the sink's rate limit per asset (thingsboard.yaml)
+
+
+@dataclass(frozen=True)
 class Config:
     telemetry: TelemetryConfig
     alarms: AlarmsConfig
     topics: TopicsConfig
+    thingsboard: ThingsBoardConfig
 
 
 # --- validation helpers -----------------------------------------------------
@@ -492,15 +498,25 @@ def _parse_topics(data: Mapping[str, Any], env: Mapping[str, str]) -> TopicsConf
     return TopicsConfig(mqtt_telemetry, _frozen(kafka))
 
 
+def _parse_thingsboard(data: Mapping[str, Any]) -> ThingsBoardConfig:
+    w = "thingsboard.yaml"
+    _keys(data, w, {"sink"})
+    sink = _mapping(data["sink"], f"{w}.sink")
+    _keys(sink, f"{w}.sink", {"max_messages_per_s_per_asset"})
+    rate = _num(sink["max_messages_per_s_per_asset"], f"{w}.sink.max_messages_per_s_per_asset", positive=True)
+    return ThingsBoardConfig(rate)
+
+
 def load_config(config_dir: Path | None = None, env: Mapping[str, str] | None = None) -> Config:
-    """Load, validate and cross-check telemetry.yaml, alarms.yaml and topics.yaml."""
+    """Load, validate and cross-check telemetry.yaml, alarms.yaml, topics.yaml and thingsboard.yaml."""
     config_dir = config_dir or CONFIG_DIR
     env = os.environ if env is None else env
     telemetry = _parse_telemetry(_read_yaml(config_dir / "telemetry.yaml"))
     alarms = _parse_alarms(_read_yaml(config_dir / "alarms.yaml"), telemetry)
     topics = _parse_topics(_read_yaml(config_dir / "topics.yaml"), env)
     _check_channels_in_schema(telemetry, topics.telemetry_raw)
-    return Config(telemetry, alarms, topics)
+    thingsboard = _parse_thingsboard(_read_yaml(config_dir / "thingsboard.yaml"))
+    return Config(telemetry, alarms, topics, thingsboard)
 
 
 def _check_channels_in_schema(telemetry: TelemetryConfig, topic: KafkaTopic) -> None:

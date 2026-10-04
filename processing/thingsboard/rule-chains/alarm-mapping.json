@@ -17,7 +17,11 @@
       {
         "type": "org.thingsboard.rule.engine.metadata.TbGetAttributesNode",
         "name": "Last alarm events",
-        "debugSettings": null,
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
         "singletonMode": false,
         "queueName": null,
         "configurationVersion": 1,
@@ -40,7 +44,11 @@
       {
         "type": "org.thingsboard.rule.engine.transform.TbTransformMsgNode",
         "name": "Decide",
-        "debugSettings": null,
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
         "singletonMode": false,
         "queueName": null,
         "configurationVersion": 0,
@@ -57,7 +65,11 @@
       {
         "type": "org.thingsboard.rule.engine.filter.TbJsSwitchNode",
         "name": "Route",
-        "debugSettings": null,
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
         "singletonMode": false,
         "queueName": null,
         "configurationVersion": 0,
@@ -74,7 +86,11 @@
       {
         "type": "org.thingsboard.rule.engine.action.TbCreateAlarmNode",
         "name": "Create alarm",
-        "debugSettings": null,
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
         "singletonMode": false,
         "queueName": null,
         "configurationVersion": 0,
@@ -100,7 +116,11 @@
       {
         "type": "org.thingsboard.rule.engine.action.TbClearAlarmNode",
         "name": "Clear alarm",
-        "debugSettings": null,
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
         "singletonMode": false,
         "queueName": null,
         "configurationVersion": 0,
@@ -118,7 +138,11 @@
       {
         "type": "org.thingsboard.rule.engine.transform.TbTransformMsgNode",
         "name": "Keep last events",
-        "debugSettings": null,
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
         "singletonMode": false,
         "queueName": null,
         "configurationVersion": 0,
@@ -135,7 +159,11 @@
       {
         "type": "org.thingsboard.rule.engine.telemetry.TbMsgAttributesNode",
         "name": "Save alarm_last",
-        "debugSettings": null,
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
         "singletonMode": false,
         "queueName": null,
         "configurationVersion": 3,
@@ -151,6 +179,83 @@
         "additionalInfo": {
           "layoutX": 1550,
           "layoutY": 150
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.transform.TbTransformMsgNode",
+        "name": "Describe mapping failure",
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 0,
+        "configuration": {
+          "scriptLang": "TBEL",
+          "jsScript": "return {msg: msg, metadata: metadata, msgType: msgType};",
+          "tbelScript": "// A node of AlarmMapping failed on this message (its Failure relation leads here). Record what is known as\n// one entry of alarm_mapping_failed on the pipeline gateway, where every mapping failure is counted\n// (dashboard counter \"Alarm mapping failures\"). The message then ends normally: it is not retried by the\n// queue and does not hold back the asset's next messages. ThingsBoard 4.2 does not pass the error text on\n// with the message; the failed node keeps it, with the message, in its debug events (failures only).\n// Before Decide, msg is the sink's entry (alarm_<channel>_<severity> keys); after it, the event itself.\nvar alarmId = null;\nif (msg.alarm_id != null) {\n    alarmId = msg.alarm_id;\n}\nvar keys = [];\nforeach (k : msg.keySet()) {\n    keys.add(k);\n}\nvar failure = {asset: metadata.deviceName, alarm_id: alarmId, alarm_type: metadata.alarmType, message_keys: keys};\nreturn {msg: {alarm_mapping_failed: JSON.stringify(failure)}, metadata: metadata, msgType: \"POST_TELEMETRY_REQUEST\"};\n"
+        },
+        "additionalInfo": {
+          "layoutX": 1100,
+          "layoutY": 450
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.transform.TbChangeOriginatorNode",
+        "name": "To the pipeline gateway",
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 0,
+        "configuration": {
+          "originatorSource": "ENTITY",
+          "entityType": "DEVICE",
+          "entityNamePattern": "pipeline-gateway",
+          "relationsQuery": {
+            "direction": "FROM",
+            "maxLevel": 1,
+            "fetchLastLevelOnly": false,
+            "filters": [
+              {
+                "relationType": "Contains",
+                "entityTypes": [],
+                "negate": false
+              }
+            ]
+          }
+        },
+        "additionalInfo": {
+          "layoutX": 1350,
+          "layoutY": 450
+        }
+      },
+      {
+        "type": "org.thingsboard.rule.engine.telemetry.TbMsgTimeseriesNode",
+        "name": "Save mapping failure",
+        "debugSettings": {
+          "failuresEnabled": true,
+          "allEnabled": false,
+          "allEnabledUntil": 0
+        },
+        "singletonMode": false,
+        "queueName": null,
+        "configurationVersion": 1,
+        "configuration": {
+          "defaultTTL": 0,
+          "useServerTs": true,
+          "processingSettings": {
+            "type": "ON_EVERY_MESSAGE"
+          }
+        },
+        "additionalInfo": {
+          "layoutX": 1600,
+          "layoutY": 450
         }
       }
     ],
@@ -198,6 +303,51 @@
       {
         "fromIndex": 5,
         "toIndex": 6,
+        "type": "Success"
+      },
+      {
+        "fromIndex": 0,
+        "toIndex": 7,
+        "type": "Failure"
+      },
+      {
+        "fromIndex": 1,
+        "toIndex": 7,
+        "type": "Failure"
+      },
+      {
+        "fromIndex": 2,
+        "toIndex": 7,
+        "type": "Failure"
+      },
+      {
+        "fromIndex": 3,
+        "toIndex": 7,
+        "type": "Failure"
+      },
+      {
+        "fromIndex": 4,
+        "toIndex": 7,
+        "type": "Failure"
+      },
+      {
+        "fromIndex": 5,
+        "toIndex": 7,
+        "type": "Failure"
+      },
+      {
+        "fromIndex": 6,
+        "toIndex": 7,
+        "type": "Failure"
+      },
+      {
+        "fromIndex": 7,
+        "toIndex": 8,
+        "type": "Success"
+      },
+      {
+        "fromIndex": 8,
+        "toIndex": 9,
         "type": "Success"
       }
     ],

@@ -9,10 +9,12 @@ titles, alarm filters and the row-click action are set here. Asset types, channe
 from config/telemetry.yaml. No device is named: one alias selects devices by the asset types, the other is the
 entity a user selects. Ids are uuid5 of fixed names, so regenerating gives the same file.
 
-Content (owner review, Task 3.2): the plant view fits one 1920x1080 screen (the layout fills the window height),
+Content (owner review, Task 3.2; counter of mapping failures added in the Task 3.2 fix): the plant view fits one
+1920x1080 screen (the layout fills the window height),
 in dashboard fullscreen and in a maximized window with ThingsBoard's side menu, also at 125 % display scaling
 (about 1536x730 CSS pixels; measured in headless Edge): the five assets with their latest values, no scrolling
-or paging, beside the counters of active critical and warning alarms, and the table of active alarms below, its
+or paging, beside the counters of active critical and warning alarms and of alarm mapping failures in the current month,
+and the table of active alarms below, its
 type and status on one line. No dashboard title: the toolbar's breadcrumb names the view. A row click opens the
 asset view: a header with the asset's name and a "Back to all assets" button, which returns to the plant view
 without stacking states, and one time-series chart per channel titled with the asset.
@@ -38,7 +40,13 @@ from config.loader import TelemetryConfig, load_config  # noqa: E402
 OUTPUT = REPO_ROOT / "processing" / "thingsboard" / "dashboards" / "operations.json"
 TITLE = "Pipeline operations"
 FQNS = ("system.time_series_chart", "system.cards.entities_table", "system.alarm_widgets.alarms_table",
-        "system.alarm_count", "system.cards.markdown_card")
+        "system.alarm_count", "system.cards.markdown_card", "system.cards.horizontal_value_card")
+# The device AlarmMapping records alarm_mapping_failed on: import_rule_chains.PIPELINE_GATEWAY (a unit test keeps
+# the two equal; this module does not import the import script's Kafka and HTTP clients).
+PIPELINE_GATEWAY = "pipeline-gateway"
+# A value card that aggregates over time takes only ThingsBoard's quick intervals (calendar periods, verified in
+# 4.2's UI: onlyQuickInterval), not "the last N days": the counter counts the current month.
+COUNT_INTERVAL = "CURRENT_MONTH"
 # How a unit in config/telemetry.yaml is written on screen; units not listed are shown as they are.
 UNIT_DISPLAY = {"degC": "°C"}
 # Table rows of 36 px instead of 52: the five assets and several alarms fit one screen also at 125 % display
@@ -64,10 +72,13 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
     channels = list(telemetry.channels)
     # Labels come from config/telemetry.yaml, the same source as the ThingsBoard alarm types.
     LABELS = {name: f"{c.label} ({UNIT_DISPLAY.get(c.unit, c.unit)})" for name, c in telemetry.channels.items()}
-    assets, selected = uid("alias-pipeline-assets"), uid("alias-selected-asset")
+    assets, selected, gateway = uid("alias-pipeline-assets"), uid("alias-selected-asset"), uid("alias-pipeline-gateway")
     aliases = {
         assets: {"id": assets, "alias": "Pipeline assets",
                  "filter": {"type": "deviceType", "resolveMultiple": True, "deviceTypes": types, "deviceNameFilter": ""}},
+        gateway: {"id": gateway, "alias": "Pipeline gateway",
+                  "filter": {"type": "entityName", "resolveMultiple": False, "entityType": "DEVICE",
+                             "entityNameFilter": PIPELINE_GATEWAY}},
         selected: {"id": selected, "alias": "Selected asset",
                    "filter": {"type": "stateEntity", "resolveMultiple": False, "stateEntityParamName": None,
                               "defaultStateEntity": None}},
@@ -105,7 +116,7 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
                                                          "searchPropagatedAlarms": False, "assignedToCurrentUser": False,
                                                          "assigneeId": None}}]})
         c["settings"] = {**c["settings"], "label": f"Active {sev.lower()}"}
-        place("default", "system.alarm_count", f"w-count-{sev}", c, (6, 4), i * 4, 18)
+        place("default", "system.alarm_count", f"w-count-{sev}", c, (6, 3), i * 3, 18)
 
     c = copy.deepcopy(defaults["system.alarm_widgets.alarms_table"]["defaultConfig"])
     # Widths that keep the longest type ("Bearing temperature high (critical)") and status ("Active Unacknowledged")
@@ -126,6 +137,26 @@ def build(defaults: dict, telemetry: TelemetryConfig) -> dict:
     if c.get("alarmFilterConfig"):
         c["alarmFilterConfig"] = {**c["alarmFilterConfig"], "statusList": ["ACTIVE"]}
     place("default", "system.alarm_widgets.alarms_table", "w-alarms", c, (24, 8), 8, 0)
+
+    # Alarm mapping failures (Task 3.2 fix): AlarmMapping records every failure as one alarm_mapping_failed entry
+    # on the pipeline gateway; the card counts them in the current month. Not an alarm: nothing to clear. (A counter of
+    # messages ThingsBoard dropped was not built: its statistics entity cannot be selected reliably; the
+    # integration session checks the drops in ThingsBoard's log instead.)
+    c = copy.deepcopy(defaults["system.cards.horizontal_value_card"]["defaultConfig"])
+    label = "Alarm mapping failures, current month"
+    c.update({"title": label, "showTitle": False, "useDashboardTimewindow": False,
+              "displayTimewindow": False, "units": "", "decimals": 0,
+              "timewindow": {"selectedTab": 0,
+                             "realtime": {"realtimeType": 1, "quickInterval": COUNT_INTERVAL, "interval": 60_000},
+                             "aggregation": {"type": "NONE", "limit": 50000}},
+              "datasources": [{"type": "entity", "name": "", "entityAliasId": gateway, "filterId": None,
+                               "dataKeys": [{**_key("alarm_mapping_failed", "timeseries", label, 0),
+                                             "aggregationType": "COUNT"}]}]})
+    grey = {"type": "constant", "color": "#757575"}
+    c["settings"] = {**c["settings"], "showIcon": True, "icon": "report_problem", "showDate": False,
+                     "iconColor": {**c["settings"]["iconColor"], **grey},
+                     "valueColor": {**c["settings"]["valueColor"], "type": "constant"}}
+    place("default", "system.cards.horizontal_value_card", "w-mapping-failures", c, (6, 2), 6, 18)
 
     c = copy.deepcopy(defaults["system.cards.markdown_card"]["defaultConfig"])
     # The header: the asset's name as the title, the way back, one line of text, no scrolling. "Back" resets the

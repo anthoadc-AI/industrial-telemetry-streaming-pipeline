@@ -448,3 +448,138 @@ def active_pipeline_alarms(tb) -> list[dict]:
                     found.append({"asset": d["name"], "type": a["type"], "alarm_id": a["details"]["alarm_id"],
                                   "status": a["status"]})
     return found
+
+
+PIPELINE_QUEUE = "PipelineSequential"
+# ThingsBoard logs a queue's statistics once a minute, for minutes with messages: wait this long after the
+# last message before reading them, so its minute is in the log.
+QUEUE_STATS_WAIT_S = 65
+QUEUE_STATS_KEYS = ("totalMsgs", "successfulMsgs", "timeoutMsgs", "failedMsgs", "tmpTimeout", "tmpFailed")
+
+
+def queue_stats_since(since: float, queue: str = PIPELINE_QUEUE) -> dict[str, int]:
+    """Sum of ThingsBoard's "[<queue>] Stats:" log lines since `since` (epoch seconds).
+
+    timeoutMsgs and failedMsgs count messages the queue gave up on (dropped); tmpTimeout and tmpFailed count
+    attempts it retried. The dashboard cannot show these reliably (see build_dashboard.py), the log can.
+    """
+    import re
+    from datetime import datetime, timezone
+
+    iso = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out = compose("--profile", "full", "logs", "--no-color", "--since", iso, "thingsboard")
+    totals = dict.fromkeys(QUEUE_STATS_KEYS, 0)
+    for line in out.stdout.splitlines():
+        if f"[{queue}] Stats:" in line:
+            for key, value in re.findall(r"(\w+) = \[(\d+)\]", line):
+                if key in totals:
+                    totals[key] += int(value)
+    return totals
+
+
+def gateway_publish(entries: list[tuple[str, dict]]) -> None:
+    """Publish (device, entry) pairs to ThingsBoard's gateway API at full speed, as the sink would without its rate
+    limit: QoS 1, one at a time, each acknowledged before the next. One at a time, as the sink does, because
+    ThingsBoard may hand messages in flight together to the rule engine in another order, and AlarmMapping then
+    rightly drops an older event that arrives after a newer one (seen with 20 in flight: 191 of 200 alarms)."""
+    import paho.mqtt.client as mqtt
+
+    from config.loader import load_config
+
+    irc = import_script()
+    types = {a.id: a.type for a in load_config(env={}).telemetry.assets}
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=unique("it-gateway"))
+    client.username_pw_set(irc.setting("TB_GATEWAY_TOKEN"))
+    client.connect(irc.setting("TB_HOST", "localhost"), int(irc.setting("TB_MQTT_PORT", "9883")))
+    client.loop_start()
+    try:
+        # Announce each device with its type first, as the sink does (CI run 37215619234: without it, ThingsBoard
+        # created the devices with the default profile, on the parallel Main queue).
+        announced = [{"device": d, "type": types[d]} for d in dict.fromkeys(d for d, _ in entries) if d in types]
+        messages = [("v1/gateway/connect", a) for a in announced] + \
+                   [("v1/gateway/telemetry", {device: [entry]}) for device, entry in entries]
+        for topic, payload in messages:
+            info = client.publish(topic, json.dumps(payload), qos=1)
+            info.wait_for_publish(30)
+            assert info.is_published()
+    finally:
+        client.loop_stop()
+        client.disconnect()
+
+
+def produce_telemetry(records: list[dict]) -> None:
+    """telemetry_v1 records to telemetry.raw, keyed by asset as the bridge writes them."""
+    from confluent_kafka.schema_registry.avro import AvroSerializer
+
+    serialize = AvroSerializer(registry(), (REPO_ROOT / "schemas" / "telemetry_v1.avsc").read_text(encoding="utf-8"))
+    ctx = SerializationContext("telemetry.raw", MessageField.VALUE)
+    p = Producer({"bootstrap.servers": BOOTSTRAP, "enable.idempotence": True})
+    for r in records:
+        p.produce("telemetry.raw", key=r["asset_id"].encode(), value=serialize(r, ctx))
+        p.poll(0)
+    assert p.flush(60) == 0
+
+
+def load_config_value() -> float:
+    """config/thingsboard.yaml: the sink's rate limit per asset."""
+    from config.loader import load_config
+
+    return load_config(env={}).thingsboard.sink_max_messages_per_s_per_asset
+
+
+def mapping_failures_since(tb, since: float) -> list[dict]:
+    """alarm_mapping_failed entries recorded on the pipeline gateway since `since` (epoch seconds)."""
+    gw = tb.request("GET", "/api/tenant/devices", query={"deviceName": import_script().PIPELINE_GATEWAY}, allow_404=True)
+    if gw is None:
+        return []
+    v = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{gw['id']['id']}/values/timeseries",
+                   query={"keys": "alarm_mapping_failed", "startTs": int(since * 1000), "endTs": int(time.time() * 1000) + 60_000,
+                          "limit": 1000})
+    return [json.loads(p["value"]) for p in v.get("alarm_mapping_failed", [])]
+
+
+def alarm_mapping_debug_failures(tb, since: float) -> list[dict]:
+    """The failure events AlarmMapping's nodes keep (debug: failures only): node, error text and message."""
+    chain = tb.find_rule_chain("AlarmMapping")
+    if chain is None:
+        return []
+    md = tb.request("GET", f"/api/ruleChain/{chain['id']['id']}/metadata")
+    found = []
+    for node in md["nodes"]:
+        page = tb.request("GET", f"/api/events/RULE_NODE/{node['id']['id']}/DEBUG_RULE_NODE",
+                          query={"tenantId": chain["tenantId"]["id"], "pageSize": 1000, "page": 0,
+                                 "startTime": int(since * 1000)})
+        found += [{"node": node["name"], "ts": e["createdTime"], "relation": e["body"].get("relationType"),
+                   "error": e["body"].get("error"), "data": e["body"].get("data")} for e in page["data"]]
+    return found
+
+
+def save_thingsboard_diagnostics(target: Path, since: float) -> list[str]:
+    """Copy ThingsBoard's GC log and the session's mapping-failure records into target (pytest's base temp
+    directory, which CI uploads when a job fails). Returns what could not be saved; never raises."""
+    problems = []
+    cp = compose("--profile", "full", "cp", "thingsboard:/var/log/thingsboard/gc.log", str(target / "thingsboard-gc.log"))
+    if cp.returncode != 0:
+        problems.append(f"gc.log: {cp.stderr.strip()[-200:]}")
+    try:
+        tb = thingsboard()
+        records = {"alarm_mapping_failed": mapping_failures_since(tb, since),
+                   "alarm_mapping_debug_failures": alarm_mapping_debug_failures(tb, since)}
+        (target / "thingsboard-failures.json").write_text(json.dumps(records, indent=1), encoding="utf-8")
+    except Exception as e:  # diagnostics only: a failure here must not hide the session's result
+        problems.append(f"failure records: {type(e).__name__}: {e}")
+    return problems
+
+
+def devices_off_pipeline_queue(tb) -> list[dict]:
+    """Devices of the configured asset types whose profile is not on the PipelineSequential queue."""
+    from config.loader import load_config
+
+    off = []
+    for asset_type in sorted({a.type for a in load_config(env={}).telemetry.assets}):
+        for d in import_script()._pages(tb, "/api/tenant/devices", {"type": asset_type}):
+            profile = tb.request("GET", f"/api/deviceProfile/{d['deviceProfileId']['id']}")
+            if profile.get("defaultQueueName") != PIPELINE_QUEUE:
+                off.append({"device": d["name"], "type": d["type"], "profile": profile["name"],
+                            "queue": profile.get("defaultQueueName")})
+    return off

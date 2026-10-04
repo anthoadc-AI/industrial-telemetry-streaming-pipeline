@@ -131,14 +131,16 @@ jobs:
       - name: Pull full-profile images
         run: docker compose --profile full pull
       # The runner's ThingsBoard volume is empty, so the first start installs
-      # the database with the demo tenant; its password is the ThingsBoard CE
-      # public default, given here as an environment variable. make -e lets
-      # the environment override the empty value .env.example sets.
+      # the database with the demo tenant and the system administrator; their
+      # passwords are the ThingsBoard CE public defaults, given here as
+      # environment variables. make -e lets the environment override the empty
+      # values .env.example sets.
       - name: Integration tests (full profile)
         timeout-minutes: 30
         env:
           PYTEST_ADDOPTS: --basetemp=${{ runner.temp }}/pytest
           TB_TENANT_PASSWORD: tenant
+          TB_SYSADMIN_PASSWORD: sysadmin
         run: make -e test-integration-full
       - name: Upload logs on failure
         if: failure()

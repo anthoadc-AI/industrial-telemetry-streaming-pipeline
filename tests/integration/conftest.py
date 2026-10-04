@@ -11,7 +11,11 @@ saves `docker compose logs` as docker-compose.log in pytest's base temp
 directory, beside the component logs. With the full profile it also fails the
 session if any pipeline alarm is still active in ThingsBoard at the end
 (owner, Task 3.2): every test must leave the alarms it raised cleared, since
-ThingsBoard's volume outlives the session and its Kafka.
+ThingsBoard's volume outlives the session and its Kafka; if ThingsBoard
+dropped any message of the PipelineSequential queue during the session (its
+statistics, read from its log); if AlarmMapping recorded a mapping failure
+(a test that provokes one removes it); or if a device of the configured asset
+types is on a profile that does not use PipelineSequential.
 
 Options:
   --stack-profile core|full   core: Mosquitto, ZooKeeper, Kafka, Schema Registry
@@ -77,21 +81,42 @@ def stack(request, tmp_path_factory):
         result = it.run_module("scripts/thingsboard/import_rule_chains.py")
         assert result.returncode == 0, result.stderr[-800:]
     report["ready_s"] = round(time.monotonic() - started, 1)
+    session_start = time.time()
 
     yield profile
 
     leftover: list[dict] | str = []
+    delivery: list[str] = []
     if profile == "full":
         try:
-            leftover = it.active_pipeline_alarms(it.thingsboard())
+            tb = it.thingsboard()
+            leftover = it.active_pipeline_alarms(tb)
+            time.sleep(it.QUEUE_STATS_WAIT_S)  # the last minute's queue statistics, into the log
+            stats = it.queue_stats_since(session_start)
+            failures = it.mapping_failures_since(tb, session_start)
+            off_queue = it.devices_off_pipeline_queue(tb)
         except Exception as e:  # reported below, after the stack is stopped
             leftover = f"could not query ThingsBoard: {type(e).__name__}: {e}"
+        else:
+            report["pipeline_queue"] = (f"messages={stats['totalMsgs']} dropped={stats['timeoutMsgs'] + stats['failedMsgs']} "
+                                        f"retried={stats['tmpTimeout'] + stats['tmpFailed']}")
+            report["mapping_failures"] = len(failures)
+            report["devices_off_queue"] = len(off_queue)
+            if stats["timeoutMsgs"] or stats["failedMsgs"]:
+                delivery.append(f"ThingsBoard dropped messages of {it.PIPELINE_QUEUE}: {stats}")
+            if failures:
+                delivery.append(f"alarm mapping failures recorded: {failures}")
+            if off_queue:
+                delivery.append(f"pipeline devices not on {it.PIPELINE_QUEUE}: {off_queue}")
         report["active_pipeline_alarms"] = leftover if isinstance(leftover, str) else len(leftover)
 
     # Container logs are gone after `down`; keep them next to the component
-    # logs (pytest's base temp directory, which CI uploads on failure).
+    # logs (pytest's base temp directory, which CI uploads on failure), with
+    # ThingsBoard's GC log and the session's mapping-failure records.
     logs = it.compose("--profile", "full", "logs", "--no-color", "--timestamps")
     (tmp_path_factory.getbasetemp() / "docker-compose.log").write_text(logs.stdout + logs.stderr, encoding="utf-8")
+    if profile == "full":
+        report["diagnostics_not_saved"] = it.save_thingsboard_diagnostics(tmp_path_factory.getbasetemp(), session_start)
     started = time.monotonic()
     down = it.compose("--profile", "full", "down")
     report["down_s"] = round(time.monotonic() - started, 1)
@@ -104,6 +129,7 @@ def stack(request, tmp_path_factory):
     leaked = it.leaked_volumes(volumes_before, volumes_after, allowed)
     assert not leaked, f"volumes leaked: {sorted(leaked)} (project volumes allowed: {sorted(allowed)}); {report}"
     assert not leftover, f"pipeline alarms still active in ThingsBoard at the end of the session: {leftover}"
+    assert not delivery, "; ".join(delivery)
 
 
 @pytest.fixture
@@ -135,4 +161,6 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             f"profile={report.get('profile')} up={report.get('up_s')}s ready={report.get('ready_s')}s "
             f"down={report.get('down_s')}s volumes before={report.get('volumes_before')} after={report.get('volumes_after')}"
             + (f" new={report['volumes_new']}" if "volumes_new" in report else "")
+            + (f" pipeline_queue: {report['pipeline_queue']} mapping_failures={report['mapping_failures']}"
+               f" devices_off_queue={report['devices_off_queue']}" if "pipeline_queue" in report else "")
             + (f" active_pipeline_alarms={report['active_pipeline_alarms']}" if "active_pipeline_alarms" in report else ""))
