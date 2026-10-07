@@ -1,6 +1,6 @@
 # Task 3.3 STEP 0 — Propuesta de protocolo de medición
 
-Estado: borrador para el DETENTE 3.3.a. Ninguna cifra de este documento es publicable: son diagnósticos de una sola máquina, tomados para diseñar el protocolo.
+Estado: **aprobado en el DETENTE 3.3.a (2026-10-06), con D1–D9 según la recomendación** de la tabla final. Ninguna cifra de este documento es publicable: son diagnósticos de una sola máquina, tomados para diseñar el protocolo.
 
 ## 0. Verificación de estado
 
