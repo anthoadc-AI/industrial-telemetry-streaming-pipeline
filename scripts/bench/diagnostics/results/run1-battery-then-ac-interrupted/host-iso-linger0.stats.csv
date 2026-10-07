@@ -1,0 +1,8 @@
+window,ts_us,broker,int_latency_p50,int_latency_p95,int_latency_avg,int_latency_max,int_latency_cnt,outbuf_latency_p50,outbuf_latency_p95,outbuf_latency_avg,outbuf_latency_max,outbuf_latency_cnt,rtt_p50,rtt_p95,rtt_avg,rtt_max,rtt_cnt
+0,3585034364,localhost:9092/1,67,67,67,67,1,232,583,297,580,5,2207,4223,2632,4207,4
+1,82970050663,localhost:9092/1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+2,82971116663,localhost:9092/1,0,0,0,0,0,485,485,485,485,1,0,0,0,0,0
+3,82972139776,localhost:9092/1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+4,82973172236,localhost:9092/1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+5,82974180966,localhost:9092/1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+6,82975188099,localhost:9092/1,0,0,4417076,4418649,219,239,74239,37041,73843,2,7647,78847,1453053,4273078,3
