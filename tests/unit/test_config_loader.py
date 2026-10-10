@@ -68,6 +68,44 @@ def test_fault_on_a_channel_the_asset_lacks(cfg):
         validate_fault(telemetry, "pump-01", "imbalance", 1.0, "w")
 
 
+def test_bridge_producer_defaults_are_the_phase_1_behaviour(cfg):
+    # Owner decision D-F (Task 3.3): settings from config/bridge.yaml, defaults identical to before.
+    assert dict(cfg.bridge.producer) == {"acks": "all", "enable.idempotence": True}
+
+
+def test_bridge_producer_accepts_any_librdkafka_setting(tmp_path):
+    extra = "  enable.idempotence: true\n  linger.ms: 0\n  compression.type: lz4"
+    target = broken(tmp_path, "bridge.yaml", "  enable.idempotence: true", extra)
+    assert dict(load_config(target, env={}).bridge.producer) == {
+        "acks": "all", "enable.idempotence": True, "linger.ms": 0, "compression.type": "lz4"}
+
+
+@pytest.mark.parametrize("old, new, message", [
+    ("producer:", "producers:", "bridge.yaml: missing key(s) ['producer']"),
+    ("  acks: all", "  acks: all\n  bootstrap.servers: elsewhere:9092",
+     "bridge.yaml.producer.bootstrap.servers: set by the bridge itself, not configurable here"),
+    ("  acks: all", "  acks: all\n  client.id: other",
+     "bridge.yaml.producer.client.id: set by the bridge itself, not configurable here"),
+    ("  acks: all", "  acks: all\n  linger.ms:", "bridge.yaml.producer.linger.ms: expected a string, number or boolean"),
+    ("  acks: all", "  acks: all\n  linger.ms: [1]", "bridge.yaml.producer.linger.ms: expected a string, number or boolean"),
+    ("  acks: all", "  acks: ''", "bridge.yaml.producer.acks: expected a string, number or boolean"),
+    ("  acks: all", "  acks: all\n  linger.ms: .nan", "bridge.yaml.producer.linger.ms: expected a finite number"),
+    ("producer:", "producer: []\nx:", "bridge.yaml: unknown key(s) ['x']"),
+])
+def test_bridge_producer_rejections(tmp_path, old, new, message):
+    with pytest.raises(ConfigError) as info:
+        load_config(broken(tmp_path, "bridge.yaml", old, new), env={})
+    assert str(info.value) == message
+
+
+def test_bridge_producer_must_be_a_mapping(tmp_path):
+    target = broken(tmp_path, "bridge.yaml", "producer:", "producer:")
+    (target / "bridge.yaml").write_text("producer: [acks]\n", encoding="utf-8")
+    with pytest.raises(ConfigError) as info:
+        load_config(target, env={})
+    assert str(info.value) == "bridge.yaml.producer: expected a mapping, got list"
+
+
 def broken(tmp_path: Path, file: str, old: str, new: str) -> Path:
     target = tmp_path / "config"
     shutil.copytree(REPO_ROOT / "config", target, ignore=shutil.ignore_patterns("__pycache__", "*.py"))

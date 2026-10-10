@@ -181,11 +181,18 @@ class ThingsBoardConfig:
 
 
 @dataclass(frozen=True)
+class BridgeConfig:
+    # librdkafka settings for the bridge's producer (bridge.yaml), as written.
+    producer: Mapping[str, str | int | float | bool]
+
+
+@dataclass(frozen=True)
 class Config:
     telemetry: TelemetryConfig
     alarms: AlarmsConfig
     topics: TopicsConfig
     thingsboard: ThingsBoardConfig
+    bridge: BridgeConfig
 
 
 # --- validation helpers -----------------------------------------------------
@@ -507,8 +514,31 @@ def _parse_thingsboard(data: Mapping[str, Any]) -> ThingsBoardConfig:
     return ThingsBoardConfig(rate)
 
 
+# Set by the bridge itself; a value here would silently be overridden or would
+# break the bridge's logging, so it is refused.
+BRIDGE_MANAGED_PRODUCER_KEYS = frozenset({"bootstrap.servers", "metadata.broker.list", "client.id", "logger"})
+
+
+def _parse_bridge(data: Mapping[str, Any]) -> BridgeConfig:
+    w = "bridge.yaml"
+    _keys(data, w, {"producer"})
+    producer = _mapping(data["producer"], f"{w}.producer")
+    settings: dict[str, str | int | float | bool] = {}
+    for key, value in producer.items():
+        kw = f"{w}.producer.{key}"
+        _str(key, f"{w}.producer")
+        if key in BRIDGE_MANAGED_PRODUCER_KEYS:
+            raise ConfigError(f"{kw}: set by the bridge itself, not configurable here")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ConfigError(f"{kw}: expected a finite number")
+        if not isinstance(value, (str, int, float, bool)) or value == "":
+            raise ConfigError(f"{kw}: expected a string, number or boolean")
+        settings[key] = value
+    return BridgeConfig(_frozen(settings))
+
+
 def load_config(config_dir: Path | None = None, env: Mapping[str, str] | None = None) -> Config:
-    """Load, validate and cross-check telemetry.yaml, alarms.yaml, topics.yaml and thingsboard.yaml."""
+    """Load, validate and cross-check telemetry.yaml, alarms.yaml, topics.yaml, thingsboard.yaml and bridge.yaml."""
     config_dir = config_dir or CONFIG_DIR
     env = os.environ if env is None else env
     telemetry = _parse_telemetry(_read_yaml(config_dir / "telemetry.yaml"))
@@ -516,7 +546,8 @@ def load_config(config_dir: Path | None = None, env: Mapping[str, str] | None = 
     topics = _parse_topics(_read_yaml(config_dir / "topics.yaml"), env)
     _check_channels_in_schema(telemetry, topics.telemetry_raw)
     thingsboard = _parse_thingsboard(_read_yaml(config_dir / "thingsboard.yaml"))
-    return Config(telemetry, alarms, topics, thingsboard)
+    bridge = _parse_bridge(_read_yaml(config_dir / "bridge.yaml"))
+    return Config(telemetry, alarms, topics, thingsboard, bridge)
 
 
 def _check_channels_in_schema(telemetry: TelemetryConfig, topic: KafkaTopic) -> None:

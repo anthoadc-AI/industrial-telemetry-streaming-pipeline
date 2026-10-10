@@ -421,6 +421,21 @@ def test_start_kafka_requires_both_topics(registry, json_log, monkeypatch):
     assert b.start_kafka() is False
 
 
+def test_start_kafka_producer_settings_come_from_config(registry, json_log, monkeypatch):
+    """config/bridge.yaml's settings reach the producer; the bridge's own keys always win."""
+    seen = []
+    fake = FakeMetadataProducer({"telemetry.raw": topic_meta(), "telemetry.dlq": topic_meta(1)})
+    monkeypatch.setattr(bridge_main, "Producer", lambda conf: seen.append(conf) or fake)
+    b = Bridge(parse_args(["--kafka-bootstrap", "kafka:1", "--client-id", "bridge-x"]))
+    b.producer_settings["linger.ms"] = 0  # as a generated benchmark config would set it
+    assert b.start_kafka() is True
+    conf = seen[0]
+    assert {k: conf[k] for k in ("acks", "enable.idempotence", "linger.ms", "bootstrap.servers", "client.id")} == {
+        "acks": "all", "enable.idempotence": True, "linger.ms": 0, "bootstrap.servers": "kafka:1", "client.id": "bridge-x"}
+    assert conf["logger"].name == "librdkafka"
+    assert events(json_log, "kafka_ready")[0]["producer_settings"] == {"acks": "all", "enable.idempotence": True, "linger.ms": 0}
+
+
 def test_start_kafka_fails_fast_when_kafka_is_unreachable(registry, json_log, monkeypatch):
     monkeypatch.setattr(bridge_main, "Producer", FakeMetadataProducer(error="transport failure"))
     assert Bridge(parse_args([])).start_kafka() is False

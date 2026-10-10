@@ -168,6 +168,9 @@ class Bridge:
         self.args = args
         cfg = load_config()
         self.kafka_topic = cfg.topics.telemetry_raw
+        # Producer settings from config/bridge.yaml (acks, idempotence, and any
+        # librdkafka setting the benchmark varies); the bridge adds its own below.
+        self.producer_settings = dict(cfg.bridge.producer)
         self.dlq_topic = cfg.topics.kafka["telemetry_dlq"]
         self.dlq_schema_str = self.dlq_topic.value_schema.read_text(encoding="utf-8")
         self.mqtt_topic = cfg.topics.mqtt_telemetry
@@ -190,10 +193,9 @@ class Bridge:
 
     def start_kafka(self) -> bool:
         self.producer = Producer({
+            **self.producer_settings,
             "bootstrap.servers": self.args.kafka_bootstrap,
             "client.id": self.args.client_id,
-            "acks": "all",
-            "enable.idempotence": True,
             # librdkafka's own log lines go through logging (as JSON) instead
             # of being written to stderr directly. They are emitted from
             # poll() and flush().
@@ -210,6 +212,7 @@ class Bridge:
                 log.error("kafka_topic_missing", extra={"topic": name, "error": str(topic.error) if topic else "not found"})
                 return False
         log.info("kafka_ready", extra={"bootstrap": self.args.kafka_bootstrap, "topic": self.kafka_topic.name,
+                                       "producer_settings": self.producer_settings,
                                        "partitions": len(metadata.topics[self.kafka_topic.name].partitions),
                                        "dlq_topic": self.dlq_topic.name})
         return True
