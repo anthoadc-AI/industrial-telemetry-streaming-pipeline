@@ -13,5 +13,6 @@
 !broker/
 !processing/alarm_consumer/
 !processing/thingsboard_sink/
+!bench/*.py
 **/__pycache__
 **/*.pyc

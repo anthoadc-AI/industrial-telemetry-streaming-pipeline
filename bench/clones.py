@@ -31,7 +31,8 @@ def generate(target: Path, clones_per_asset: int = 0, linger_ms: float | None = 
         raise ValueError("clones_per_asset must be >= 0")
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__", "*.py"))
+    # The loader's .py files come too: the copy is mounted over the containers' whole config/ package.
+    shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__"))
 
     if clones_per_asset:
         telemetry = yaml.safe_load((target / "telemetry.yaml").read_text(encoding="utf-8"))

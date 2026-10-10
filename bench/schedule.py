@@ -1,7 +1,12 @@
 """Open-loop schedule, sample values and expected alarms: the generator's logic, free of I/O.
 
-Open loop (protocol 5.1.1): message i is due at t0 + i / rate on the monotonic clock, whatever happened to the
-messages before it, and its ts is that scheduled instant on the wall clock, never the time it was actually sent.
+Open loop (protocol 5.1.1): message i is due at t0 + i / rate, whatever happened to the messages before it, and its
+ts is that scheduled instant, never the time it was actually sent. The schedule runs on the same clock as ts, the
+VM's wall clock: the protocol said monotonic, but in the Docker Desktop VM CLOCK_MONOTONIC runs about 100 ppm off
+CLOCK_REALTIME (measured at STEP 0, section 2, and again in the STEP 1 trial: -94 ppm), so a monotonic schedule
+with wall-clock ts sent messages ever earlier than their ts (4 ms by the end of a 60 s trial). Every other time
+stamp (the bridge's receive time, CreateTime, the meter, the alarm consumer) is on that wall clock too; a jump
+of it shows as generator lateness and invalidates the run.
 A generator that falls behind therefore sends the late messages at once, still stamped with their scheduled
 instants, so the delay counts as latency downstream (no coordinated omission), and its own lateness (actual send
 minus due) is recorded apart, for the saturated-generator rule.
@@ -83,11 +88,12 @@ def sample(plan: Plan, pattern: FaultPattern, config: Config, i: int, values: di
     return message
 
 
-def run_schedule(plan: Plan, mono_t0: float, now: Callable[[], float], sleep: Callable[[float], None],
+def run_schedule(plan: Plan, t0: float, now: Callable[[], float], sleep: Callable[[float], None],
                  send: Callable[[int], None], late_ms: Callable[[float], None], stop: Callable[[], bool] = lambda: False) -> int:
     """Send every message of the plan at its due time; returns how many were sent.
 
-    now/sleep are the monotonic clock and a sleep, injected so tests can run on a fake clock. A message already
+    t0 is message 0's due time on the clock now() reads (the wall clock, in seconds, in the generator); now/sleep
+    are injected so tests can run on a fake clock. A message already
     late is sent at once (open loop: nothing waits for the messages before it to be acknowledged), and its
     lateness, actual minus due in ms, goes to late_ms.
     """
@@ -95,7 +101,7 @@ def run_schedule(plan: Plan, mono_t0: float, now: Callable[[], float], sleep: Ca
     for i in range(plan.count):
         if stop():
             break
-        due = mono_t0 + plan.due_offset_s(i)
+        due = t0 + plan.due_offset_s(i)
         delay = due - now()
         if delay > 0:
             sleep(delay)

@@ -125,7 +125,7 @@ def test_open_loop_no_coordinated_omission():
         sent.append((i, clock.now(), p.ts_ms(i)))
         clock.t += 0.35 if i == 2 else 0.0  # message 2 takes 350 ms to send
 
-    n = schedule.run_schedule(p, mono_t0=clock.now(), now=clock.now, sleep=clock.sleep, send=send, late_ms=late.append)
+    n = schedule.run_schedule(p, t0=clock.now(), now=clock.now, sleep=clock.sleep, send=send, late_ms=late.append)
     assert n == 10
     assert [ts for _, _, ts in sent] == [i * 100 for i in range(10)]  # every ts is its scheduled instant
     # Messages 3..5 were due during the slow send: sent at once, late by 250, 150 and 50 ms.
@@ -258,6 +258,7 @@ def test_clones_keep_overrides_and_load(tmp_path):
     assert cfg.alarms.rule("pump-02-c00", "bearing_temperature_c").warning == 80.0
     assert cfg.telemetry.fault_schedule == () and dict(cfg.bridge.producer)["linger.ms"] == 0
     assert (tmp_path / "config" / "telemetry.yaml").read_text(encoding="utf-8").startswith("# GENERATED")
+    assert (tmp_path / "config" / "loader.py").is_file()  # the copy replaces the containers' whole config/ package
 
 
 def test_no_clones_is_the_real_config(tmp_path):

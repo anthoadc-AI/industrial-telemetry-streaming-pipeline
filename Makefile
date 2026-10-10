@@ -49,6 +49,11 @@ quality
                               up-pipeline-core or make up-pipeline, telemetry.raw empty)
   make check-secrets          scan the staged files for secrets; the pre-commit hook runs it
 
+benchmark (config/benchmark.yaml; AC power, no other project's containers)
+  make bench-trial            the harness end to end: 30 s measured at a low rate, never publishable
+  make bench-plan             the runs of STEP 2 and the time they need
+  make bench-report           the figures tables, generated from bench/results/
+
 tools
   make install                create .venv, install the Python and npm dependencies, enable the
                               versioned git hooks (core.hooksPath scripts/hooks)
@@ -58,7 +63,7 @@ endef
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install up up-core up-pipeline up-pipeline-core down logs check-secrets lint test coverage test-integration test-integration-full smoke smoke-containers clean
+.PHONY: help install up up-core up-pipeline up-pipeline-core down logs check-secrets lint test coverage test-integration test-integration-full smoke smoke-containers bench-trial bench-plan bench-report clean
 
 # The recipe line is only there so Make does not report "Nothing to be done";
 # `exit 0` is a builtin of both sh and cmd.exe.
@@ -144,6 +149,16 @@ smoke:
 
 smoke-containers:
 	$(VENV_PY) scripts/smoke/run_smoke_containers.py
+
+# The benchmark (Phase 3, Task 3.3). The harness recreates the stack itself.
+bench-trial:
+	$(VENV_PY) -m bench.harness run --trial
+
+bench-plan:
+	$(VENV_PY) -m bench.harness plan
+
+bench-report:
+	$(VENV_PY) -m bench.report
 
 clean:
 	$(VENV_PY) scripts/clean.py --pycache .coverage coverage.xml coverage.json coverage .pytest_cache .ruff_cache smoke-logs smoke-logs-containers
