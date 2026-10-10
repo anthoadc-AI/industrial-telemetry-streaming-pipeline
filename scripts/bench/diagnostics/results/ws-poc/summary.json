@@ -1,0 +1,29 @@
+{
+  "count": 600,
+  "rate": 10.0,
+  "pubacks": 600,
+  "received": 600,
+  "distinct_seq": 600,
+  "missing": [],
+  "missing_count": 0,
+  "duplicates": 0,
+  "wrong_ts": 0,
+  "in_order": true,
+  "max_points_per_update": 1,
+  "publisher_late_ms": {
+    "p99": 0.767,
+    "max": 5.361
+  },
+  "arrival_minus_ts_ms": {
+    "p50": 19.4,
+    "p95": 31.4,
+    "min": 3.8,
+    "max": 124.9
+  },
+  "observer_end": {
+    "event": "observer_finished",
+    "reason": "expected_count",
+    "received": 600
+  },
+  "initial_points_before_run": 1
+}
