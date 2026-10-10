@@ -1,6 +1,6 @@
 # Task 3.3 STEP 0 — Propuesta de protocolo de medición
 
-Estado: **aprobado en el DETENTE 3.3.a (2026-10-06), con D1–D9 según la recomendación** de la tabla final. Ninguna cifra de este documento es publicable: son diagnósticos de una sola máquina, tomados para diseñar el protocolo.
+Estado: **aprobado en el DETENTE 3.3.a (2026-10-06), con D1–D9 según la recomendación** de la tabla final, **modificado por las enmiendas del 2026-10-09** (sección al final), que prevalecen sobre el resto del documento. Ninguna cifra de este documento es publicable: son diagnósticos de una sola máquina, tomados para diseñar el protocolo.
 
 ## 0. Verificación de estado
 
@@ -36,7 +36,7 @@ Estado: **aprobado en el DETENTE 3.3.a (2026-10-06), con D1–D9 según la recom
 | strapi-flights | node:20-alpine | flights-api | **unless-stopped** | 2026-05-18 |
 | hello | hello-world | — | no | 2026-05-07 |
 
-  Solo `strapi-flights` tiene política de reinicio (`unless-stopped`). Como se paró a mano, Docker no lo arranca solo, pero un `docker compose up` de su proyecto sí lo haría. Los contenedores de Airflow y Hadoop que menciona el briefing **no existen** como contenedores en esta máquina: solo quedan imágenes `bde2020/hadoop-*` (`docker images`).
+  Solo `strapi-flights` tiene política de reinicio (`unless-stopped`). Como se paró a mano, Docker no lo arranca solo, pero un `docker compose up` de su proyecto sí lo haría. Los contenedores de Airflow y Hadoop que menciona el briefing **no existen** en esta máquina porque Anthony los bajó el 2026-10-05 con `docker compose -p <proyecto> down`, sin `-v`, conservando sus volúmenes. Quedan sus imágenes (`apache/airflow:2.1.1`, `apache/airflow:2.3.0` y `bde2020/hadoop-*`) y sus volúmenes, de los proyectos `airflow-docker`, `airflow_assignment`, `airflow` y `docker-hadoop` (`docker volume ls`, comprobado el 2026-10-09).
 
 ### 0.3 Entorno
 
@@ -160,7 +160,7 @@ La celda `host-burst-base` dio p50 de 55 a 59 ms en unas pasadas y de 14 a 18 ms
 
 | Hipótesis | Veredicto | Celda que lo sustenta |
 |---|---|---|
-| H1 reenvío de puertos de Docker Desktop | **Confirmada**, como causa del modo lento y del coste de base | Modo lento en 17/32 celdas en ráfaga del host y 0/8 en el contenedor (`bimodal-ac`); `rtt` base 1,5–1,8 ms en el host frente a 0,7–0,8 ms en el contenedor (pasada 4) |
+| H1 reenvío de puertos de Docker Desktop | **Ubicación confirmada (camino host a VM), mecanismo sin identificar.** Es ahí donde aparecen el modo lento y el coste de base | Modo lento en 17/32 celdas en ráfaga del host y 0/8 en el contenedor (`bimodal-ac`); `rtt` base 1,5–1,8 ms en el host frente a 0,7–0,8 ms en el contenedor (pasada 4) |
 | H2 Nagle + ACK retardado (Nagle del cliente) | **Descartada** como causa de la discrepancia. Que la firma sea de ~40 ms sí apunta a un ACK retardado, pero dentro del camino del reenvío, no del Nagle del cliente. | `host-burst-nagleoff` lenta en 4/8 y `host-burst-l0-nagleoff` en 6/8 (`bimodal-ac`); `host-iso-nagleoff` 14,9 frente a 15,2 ms |
 | H3 linger/batching | **Confirmada como componente del valor absoluto**, no de la diferencia aislado/ráfaga: el linger por defecto (5 ms) es casi toda la latencia de un mensaje en el modo rápido | `host-iso-linger0` 2,0 frente a 15,2 ms; `ctr-iso-linger0` 1,0 frente a 6,4 ms |
 | H4 conexión o CPU en reposo | **Descartada** | `host-singles10-base` 14,6 frente a `host-iso-base` 15,2 ms; `ctr-singles10` 6,3 frente a 6,4 ms |
@@ -360,7 +360,7 @@ Con cada cifra van siempre la tasa de entrada y el número de muestras. Las cifr
 1. **No existe `src/`.** El código está en `edge/`, `bridge/`, `processing/`, `broker/` y `common/`. No se modificó ninguno de ellos, ni `config/`, ni `docker-compose.yml`.
 2. **`ts_to_ack_ms` ya no existe:** se eliminó en `fe37d8f` (Task 3.1-A).
 3. **El origen de "~16 ms en el smoke, ~42–44 ms con mensajes aislados" no está en el repo.** No aparece en ningún documento ni mensaje de commit (`git log --all` con esas cifras). En STEP 0 de la Task 3.1, el commit `fe37d8f` midió p50 de 56–64 ms con el bridge. Los ~42–44 ms aislados no se reproducen (1.4).
-4. **No existen contenedores de Airflow ni de Hadoop** en esta máquina; solo imágenes `bde2020/hadoop-*` (0.2).
+4. **No hay contenedores de Airflow ni de Hadoop**: Anthony los bajó el 2026-10-05 con `docker compose -p <proyecto> down`, sin `-v`, y sus volúmenes se conservan (0.2).
 5. **Criterio de validez.** Exigir corriente alterna fue idea mía, añadida tras la primera pasada (antes no había ningún criterio). En la pasada 3, con el portátil en batería, lo cambié por mi cuenta a "la misma fuente de alimentación durante toda la pasada, batería incluida". Eso se apartó de tu criterio ("en corriente alterna durante toda la pasada"), que restauraste. La pasada 3 se paró a tu indicación y sus datos se conservan, etiquetados como batería (`results/run3-battery-stopped`).
 6. **Cuatro pasadas en vez de una:**
    - pasada 1: interrumpida por una suspensión al cerrar la tapa y luego una hibernación, de 22:50 a 21:03 del día siguiente (registro de sistema, Kernel-Power 42 y 107); dos celdas inválidas;
@@ -403,3 +403,14 @@ Con cada cifra van siempre la tasa de entrada y el número de muestras. Las cifr
 | D7 | Latencia hasta ThingsBoard (F6) | (a) observador por WebSocket: un script nuevo, el método no está verificado. (b) instrumentar el sink para que registre el PUBACK: cambio de código; mide "aceptado por el transporte", no "procesado". (c) no publicar F6: solo F5 y F7. | **(a)**, verificado en el STEP de implementación; si no funciona, **(c)**. |
 | D8 | Criterio de throughput máximo sostenible | Umbrales de 5.1.7: pendiente del lag ≤ 0 y lag máximo < 1 s de mensajes; p99 extremo a extremo < 1 s y sin crecer de la primera mitad a la segunda; cero pérdidas. Coste: con umbrales más estrictos, la tasa publicada sale más baja. | Los propuestos. |
 | D9 | Perfiles | Pipeline en perfil core; sink en perfil full (4.3). Coste: dos sesiones de medición. | Sí. |
+
+## Enmiendas del 2026-10-09
+
+Anthony confirmó el 2026-10-09 la aprobación del DETENTE 3.3.a con D1–D9 según la recomendación, con las enmiendas y la decisión siguientes. Fuente: `docs/internal/claude_code_briefings/phase3_task3.3_step1_benchmark_implementation.md`. Donde difieran del resto del documento, prevalecen estas.
+
+- **E1 (sobre D1).** El bridge, el alarm consumer y el sink pasan a correr en contenedores, como un perfil del compose. Es un cambio de producto, no un apaño del benchmark: tiene que servirle a cualquiera que clone el repo. Las CPU de la VM se fijan y se declaran antes de medir.
+- **E2 (sobre D5).** El techo de throughput se busca con una corrida por escalón. Las cinco repeticiones se hacen solo en el escalón candidato y en el siguiente.
+- **E3 (sobre D6 y D7).** Antes de construir nada se verifica (a) si el bridge y el alarm consumer aceptan activos que no están en la config, y (b) si funciona el observador por WebSocket de ThingsBoard. Si (b) falla, se elimina la cifra F6 (latencia hasta ThingsBoard) sin improvisar otro método.
+- **E4 (texto).** Aplicada en 0.2, en 1.4 (H1) y en 6.4.
+- **Decisión D8.** El criterio de throughput máximo sostenible es un p99 extremo a extremo menor de 1 s (justificado como un periodo de muestreo del sensor), con lag acotado y cero pérdidas. Es la única cifra de throughput que se publica. Los resultados crudos deben permitir recalcular el corte con otros umbrales sin repetir corridas. Sustituye a la fila D8 de la tabla de decisiones y a los umbrales de 5.1.7 donde difieran.
+- **D2 (precisión).** El bridge conserva el `linger.ms` por defecto. El arnés tiene que poder lanzar una corrida con otro valor por parámetro, sin tocar el código del bridge, para una posible corrida de sensibilidad que se decidirá más adelante.
