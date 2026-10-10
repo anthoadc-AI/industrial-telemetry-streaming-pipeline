@@ -1,0 +1,94 @@
+# The pipeline benchmark (Phase 3, Task 3.3): every parameter of the harness, the
+# generator and the meter. No script under bench/ holds a benchmark constant.
+# Protocol: docs/internal/benchmark_protocol_proposal.md (with the amendments of
+# 2026-10-09); design: docs/internal/benchmark_step1_design.md.
+
+# Checked before, during (every monitor_interval_s) and after every run; any
+# failure invalidates the run.
+environment:
+  require_ac_power: true
+  min_host_free_memory_gb: 1.5
+  monitor_interval_s: 5
+
+run:
+  warmup_s: 30            # sent, not measured (protocol 5.1.3)
+  measured_s: 300         # the measured interval (protocol 5.1.4)
+  drain_timeout_s: 180    # after the last send, time allowed for every lag to reach 0
+  cooldown_s: 120         # pause between runs (thermal risk, owner DETENTE 3.3.b)
+  # The end-to-end trial of the harness (STEP 1, 1.3.6); never publishable.
+  trial:
+    measured_s: 30
+    rate_per_s: 5
+
+# Latency points (F1, F2, F4): the five real assets at 1 Hz each, the live rate,
+# and ten times that.
+latency:
+  rates_per_s: [5, 50]
+  repetitions: 5
+
+# Throughput ladder (F3, owner decisions D8 and E2): one run per step, then
+# repetitions_at_candidate runs at the highest step that passed and at the next.
+throughput:
+  ladder_per_s: [250, 500, 1000, 2000, 3000, 4000, 6000, 8000]
+  repetitions_at_candidate: 5
+  # Owner decision D-A: each real asset cloned this many times (with its alarm
+  # overrides) in a generated copy of config/, so every message meets the
+  # alarm state machine. 20 clones of 5 assets: 100 assets.
+  clones_per_asset: 20
+
+generator:
+  # The paho QoS 1 window: messages in flight before the broker's PUBACK.
+  max_inflight: 1000
+  # Saturated generator (owner, DETENTE 3.3.b): its own lateness (actual send
+  # minus scheduled instant) above either limit invalidates the run; on the
+  # ladder, a step lost this way reports "limited by the generator".
+  max_late_p99_ms: 5.0
+  max_late_max_ms: 100.0
+  # Deterministic alarms for F2: every asset's bearing temperature is high for
+  # high_s out of every period_s (wall time, so the alarm load does not grow
+  # with the rate). Other channels stay at half their warning threshold.
+  fault_pattern:
+    channel: bearing_temperature_c
+    high_value: 100.0
+    normal_value: 50.0
+    period_s: 20
+    high_s: 10
+
+meter:
+  fetch_wait_max_ms: 5
+
+# Owner decision D8: the only published throughput figure is the highest
+# ladder step meeting all three. The raw results keep what is needed to
+# recompute the cut with other values (bench/report.py --p99-ms ...).
+criteria:
+  p99_ms: 1000            # p99 end to end below one sensor sample period
+  max_lag_s: 1.0          # lag never above this many seconds of messages at the step's rate
+  # Least-squares slope of the lag over the measured interval, in seconds of lag
+  # gained per second. Not 0: noise around a steady lag gives small positive
+  # slopes; 0.001 is 0.3 s gained over 300 s, under the 1 s bound above.
+  max_lag_slope_per_s: 0.001
+  max_lost: 0
+
+cpu:
+  # A client container above this share of one core flags the run CPU-bound.
+  max_client_core_fraction: 0.8
+  # Owner decision D-E: vCPUs pinned per service in the benchmark's compose
+  # override only (the VM has 8 CPUs, .wslconfig processors=8).
+  cpusets:
+    broker: "0-1"
+    mosquitto: "2"
+    bridge: "3"
+    alarm-consumer: "4"
+    generator: "5"
+    meter: "6"
+    schema-registry: "7"
+    zookeeper: "7"
+
+bridge:
+  # F4 needs the bridge's message_delivered line per message (INFO); the
+  # throughput runs keep it off (WARNING) so logging does not load the bridge.
+  log_level_latency: INFO
+  log_level_throughput: WARNING
+  # Owner decision D2: null keeps librdkafka's default; a number is written
+  # into the run's generated config/bridge.yaml (sensitivity runs only).
+  linger_ms: null
