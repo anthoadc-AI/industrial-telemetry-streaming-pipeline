@@ -3,7 +3,7 @@
 The session fixture refuses to run if a stack (or anything on its ports) is
 already up, starts the stack with the repository's docker-compose.yml (core
 profile, or full with ThingsBoard), provisions it, and stops it at the end
-with `docker compose --profile full down`, never -v. It lists Docker volumes
+with `docker compose down` over every profile (as `make down`), never -v. It lists Docker volumes
 before and after and fails the session if any leaked: a new volume other than
 the named volumes docker-compose.yml declares (those are created by the first
 `up` on a clean machine and kept by `down`, by design). Before stopping, it
@@ -61,7 +61,7 @@ def stack(request, tmp_path_factory):
     profile = request.config.getoption("--stack-profile")
     ports = [1883, 9092, 8081] + ([8080, 9883] if profile == "full" else [])
     busy = [p for p in ports if it.port_open(p)]
-    if busy or it.compose("--profile", "full", "ps", "-q").stdout.strip():
+    if busy or it.compose(*it.ALL_PROFILES, "ps", "-q").stdout.strip():
         pytest.exit(f"a stack is already running (ports in use: {busy}); stop it with `make down` first", returncode=3)
 
     report = request.config.stack_report
@@ -73,7 +73,7 @@ def stack(request, tmp_path_factory):
     started = time.monotonic()
     up = it.compose(*profile_args, "up", "-d", "--wait", "--wait-timeout", "600", "--force-recreate")
     if up.returncode != 0:
-        it.compose("--profile", "full", "down")
+        it.compose(*it.ALL_PROFILES, "down")
         pytest.exit(f"docker compose up failed: {up.stderr[-800:]}", returncode=3)
     report["up_s"] = round(time.monotonic() - started, 1)
     it.provision()
@@ -113,12 +113,12 @@ def stack(request, tmp_path_factory):
     # Container logs are gone after `down`; keep them next to the component
     # logs (pytest's base temp directory, which CI uploads on failure), with
     # ThingsBoard's GC log and the session's mapping-failure records.
-    logs = it.compose("--profile", "full", "logs", "--no-color", "--timestamps")
+    logs = it.compose(*it.ALL_PROFILES, "logs", "--no-color", "--timestamps")
     (tmp_path_factory.getbasetemp() / "docker-compose.log").write_text(logs.stdout + logs.stderr, encoding="utf-8")
     if profile == "full":
         report["diagnostics_not_saved"] = it.save_thingsboard_diagnostics(tmp_path_factory.getbasetemp(), session_start)
     started = time.monotonic()
-    down = it.compose("--profile", "full", "down")
+    down = it.compose(*it.ALL_PROFILES, "down")
     report["down_s"] = round(time.monotonic() - started, 1)
     volumes_after = it.volume_names()
     report["volumes_after"] = len(volumes_after)

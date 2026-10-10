@@ -38,6 +38,11 @@ with warnings.catch_warnings():
     warnings.showwarning = _show
 
 
+# Every profile of docker-compose.yml, as `make down` uses them: stopping or listing with these leaves nothing
+# of the project behind, including the pipeline containers (pipeline-tb is only valid together with full).
+ALL_PROFILES = ("--profile", "full", "--profile", "pipeline", "--profile", "pipeline-tb", "--profile", "simulator")
+
+
 def compose(*args: str, timeout: float = 900) -> subprocess.CompletedProcess:
     return subprocess.run(["docker", "compose", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout)
 
