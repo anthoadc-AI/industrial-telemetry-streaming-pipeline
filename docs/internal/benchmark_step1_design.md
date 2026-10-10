@@ -1,6 +1,6 @@
 # Task 3.3 STEP 1 — Verificaciones previas (E3) y diseño
 
-Estado: para el DETENTE 3.3.b. No se ha implementado nada de lo que aquí se diseña. Fuente: `docs/internal/claude_code_briefings/phase3_task3.3_step1_benchmark_implementation.md`, secciones 1.0 y 1.1. Las enmiendas del 2026-10-09 están en `docs/internal/benchmark_protocol_proposal.md`.
+Estado: **aprobado en el DETENTE 3.3.b con los cambios de la sección "Decisiones del DETENTE 3.3.b"** (al final), que prevalecen sobre el resto del documento donde difieran. Fuente: `docs/internal/claude_code_briefings/phase3_task3.3_step1_benchmark_implementation.md`, secciones 1.0 y 1.1. Las enmiendas del 2026-10-09 están en `docs/internal/benchmark_protocol_proposal.md`.
 
 ## 1.0 Estado
 
@@ -250,3 +250,49 @@ El bridge no admite hoy ningún ajuste del productor: su configuración está fi
 - D2 no se puede cumplir sin código: el bridge no tiene parámetro de productor (D-F).
 - F1 cambia de punto de medida si se aprueba D-G.
 - Sin verificar: los tamaños de imagen y los tiempos de CI (estimados), el riesgo térmico con 8 vCPU, la tasa máxima de un generador Python de un solo proceso y el coste del log INFO por mensaje del bridge a tasa alta.
+
+## Decisiones del DETENTE 3.3.b
+
+Anthony aprobó el DETENTE 3.3.b con estos cambios. Prevalecen sobre las secciones anteriores donde difieran.
+
+| # | Decisión |
+|---|---|
+| D-A | Aprobada: clones de los activos reales a partir de una config generada. |
+| D-B | Aprobada: `make up` no cambia; se añade `make up-pipeline`. |
+| D-C | Aprobada: el orden de arranque se encadena en el Makefile. |
+| D-D | Aprobada: job nuevo de CI, `pipeline-containers`. |
+| D-E | Aprobada y aplicada por Anthony: `.wslconfig` con `processors=8`, WSL reiniciado. Comprobado: `docker info` da 8 CPU y 12 543 291 392 B. `cpuset` por servicio solo en un override del benchmark. |
+| D-F | **Cambiada: sin lanzador.** El bridge lee sus ajustes de productor de `config/` (fuente única), con valores por defecto idénticos al comportamiento actual (`acks=all`, idempotencia, y el resto los de librdkafka), y con tests unitarios. Esto levanta, solo para este cambio, la restricción del briefing de no tocar el bridge. Es lo que necesita el arnés (1.3) para lanzar una corrida con otro `linger.ms`. |
+| D-G | **Aprobada con condición:** el medidor registra también el timestamp de productor (`CreateTime` de Kafka) de cada registro, para separar la parte del bridge y la parte de lectura de F1. |
+| D-H | Aprobada: se versionan los histogramas de resolución fija; las muestras crudas, solo en local. |
+
+### Nueva definición de F1 (D-G)
+
+**F1 = `t_visible − ts`**, donde:
+- `ts` es el instante programado de la muestra por el generador;
+- `t_visible` es el instante (reloj de pared de la VM) en que el medidor, un consumidor de `telemetry.raw` en un contenedor de la misma VM, recibe el registro.
+
+Se publica como p50/p95/p99 a una tasa fija declarada, junto con `fetch.wait.max.ms` del medidor. Se descompone en dos partes, que suman F1:
+- **Parte del bridge: `CreateTime − ts`.** `CreateTime` es el timestamp que el productor del bridge pone en el registro al llamar a `produce()`, en milisegundos y con el reloj del contenedor del bridge, que es el mismo que el de la VM (propuesta, 2.3). Incluye MQTT, la cola del bridge, la validación y la serialización. Lo que tarda el productor en enviar y obtener el ack (linger incluido) **no** está en esta parte.
+- **Parte de lectura: `t_visible − CreateTime`.** Incluye el linger, el envío, el append en el broker y el fetch del medidor.
+
+Los dos timestamps tienen resolución de 1 ms (`ts` lo trunca el generador, y `CreateTime` es un entero de ms), así que cada parte tiene ±1 ms de error de cuantización.
+
+### Resolución de los histogramas (D-H)
+
+Cubos fijos, log-lineales, iguales en todas las corridas y métricas:
+- **0,1 ms** de 0 a 10 ms (100 cubos);
+- **1 ms** de 10 ms a 1 s (990 cubos);
+- **10 ms** de 1 s a 60 s (5 900 cubos);
+- un cubo de desbordamiento por encima de 60 s.
+
+Un percentil, o la fracción por debajo de un umbral (D8), se recalcula con un error menor que la anchura del cubo en que cae: 0,1 ms, 1 ms o 10 ms. El umbral de D8 (1 s) cae justo en un borde de cubo.
+
+### Requisitos añadidos al arnés (1.3)
+
+1. **Generador saturado.** Si el retraso propio del generador supera un límite fijado en `config/benchmark.yaml`, la corrida es inválida. Si el generador es el cuello de botella de la escalera de throughput, el resultado se informa como "limitado por el generador", no como techo del pipeline.
+2. **Riesgo térmico.** En cada corrida se registra el uso de CPU por contenedor, y el plan de corridas incluye pausas de enfriamiento entre repeticiones.
+
+### Alcance de la 1.2
+
+La 1.2 implementa la contenerización (D-B a D-D). D-F, D-G, los requisitos añadidos y D-A (la config generada) se implementan en la 1.3, junto con el generador y el arnés.
