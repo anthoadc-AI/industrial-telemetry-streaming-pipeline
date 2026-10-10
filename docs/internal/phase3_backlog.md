@@ -44,6 +44,21 @@ Items recorded during Phase 3 for a later task, with where they come from. Phase
 - **The ThingsBoard path's ceiling is measured and reported apart from the pipeline's figures** (owner, 2026-10-04). The path to ThingsBoard is limited to 10 msg/s per asset by design (see the 3.4 notes); the pipeline's throughput and latency figures (Kafka, alarm consumer) must not be mixed with it.
 - (Reminder, from the 3.4 notes) Option B, persistent Kafka storage, is to be reconsidered here.
 
+## Unscheduled (owner: not in Task 3.3)
+
+- **ThingsBoard always stops by SIGKILL; a wrapper with a SIGTERM trap would let it shut down cleanly** (owner, 2026-10-10, DETENTE 3.3.c, option b).
+  - **Fact.** The image `thingsboard/tb-postgres:4.2.1.1` has no entrypoint, and its command is `start-tb.sh`, a bash script that runs as PID 1. It calls `start-db.sh`, runs `java …` in the foreground (no `exec`, no `trap`), then `stop-db.sh`. A PID 1 bash with no handler ignores SIGTERM and does not forward it, so Java never sees the stop and `stop-db.sh` never runs.
+  - **Verified on 2026-10-10.** After `make up` and `make down` with a 60 s grace period, `docker events` showed SIGTERM, then SIGKILL 60 s later, exit 137.
+  - **Current state.** The compose file gives ThingsBoard a 5 s grace period and says why: a longer one only slows `make down`. Postgres does crash recovery on every start.
+  - **Option (b).** A wrapper script of our own, mounted read-only as the service's `command`, that:
+    1. traps SIGTERM;
+    2. starts the database and ThingsBoard as the image does, with Java in the background;
+    3. forwards the signal to Java and waits for it;
+    4. runs `stop-db.sh`.
+    
+    It replaces a third-party start-up, so it must be reviewed on every ThingsBoard upgrade.
+  - **Verification of (b).** After `make up` and `make down`, `docker events` must show no SIGKILL for the thingsboard container (exit 0 or 143). On the next start, the Postgres log must have no "database system was not properly shut down" line.
+
 ## For the Phase 3 closure report
 
 - **Main had two consecutive red runs** (owner, 2026-10-04):
