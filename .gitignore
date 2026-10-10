@@ -19,3 +19,4 @@ coverage.json
 coverage/
 coverage.xml
 smoke-logs/
+smoke-logs-containers/
