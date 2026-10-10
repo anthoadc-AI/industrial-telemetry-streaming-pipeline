@@ -29,12 +29,19 @@
 # Host ports come from .env (see .env.example), with the defaults shown.
 # No service has a restart policy: nothing comes back by itself after a
 # Docker Desktop restart.
+#
+# Every service sets stop_grace_period. Docker Desktop's API proxy creates
+# containers that set none with StopTimeout 1 s (the Linux engine's default is
+# 10 s), so without explicit values a stop would SIGKILL anything slower than
+# one second on Docker Desktop and not on Linux CI. ThingsBoard is the
+# exception: it ignores SIGTERM (see its service).
 
 name: industrial-telemetry
 
 services:
   mosquitto:
     image: eclipse-mosquitto:2.1.2-alpine
+    stop_grace_period: 5s
     ports:
       - "${MQTT_PORT:-1883}:1883"
     volumes:
@@ -52,6 +59,7 @@ services:
 
   zookeeper:
     image: confluentinc/cp-zookeeper:6.1.1
+    stop_grace_period: 10s
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -73,6 +81,7 @@ services:
 
   broker:
     image: confluentinc/cp-server:6.1.1
+    stop_grace_period: 30s
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -108,6 +117,7 @@ services:
 
   schema-registry:
     image: confluentinc/cp-schema-registry:6.1.1
+    stop_grace_period: 10s
     depends_on:
       broker:
         condition: service_healthy
@@ -128,6 +138,13 @@ services:
 
   thingsboard:
     image: thingsboard/tb-postgres:4.2.1.1
+    # The image's start script (start-tb.sh) runs as PID 1 and does not forward
+    # SIGTERM to ThingsBoard or Postgres (verified 2026-10-10: SIGTERM, then
+    # SIGKILL at the end of a 60 s grace period, exit 137), so the container
+    # always ends by SIGKILL and Postgres does crash recovery on the next start.
+    # A longer grace period would only slow make down. Backlog: a wrapper with a
+    # SIGTERM trap (docs/internal/phase3_backlog.md).
+    stop_grace_period: 5s
     profiles: ["full"]
     ports:
       - "${TB_HTTP_PORT:-8080}:9090"
