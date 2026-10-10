@@ -113,7 +113,7 @@ Prueba de concepto: unos 8 minutos de trabajo de los 60 permitidos (inicio 21:54
 
 ### CI
 
-- **Los jobs actuales no cambian:** siguen probando los procesos en el host.
+- **El job `integration` actual cambia (corrección del 2026-10-10):** además de probar los procesos en el host, ahora construye las dos imágenes, porque `tests/integration/test_containers.py` (perfil core) arranca el pipeline en contenedores. El build se añade a su duración. `checks` no cambia. `integration-full` también construye las dos imágenes: ejecuta los dos tests de contenedores, incluido el del sink, que es del perfil full.
 - **Job nuevo propuesto, `pipeline-containers`** (`needs: checks`): build de las dos imágenes, `make up-pipeline-core`, `make smoke-containers` y `make down`.
 - **Tiempo estimado, no medido:** build en frío de 1 a 2 minutos (descargas de unos 45 y 70 MB de bases, más pip y npm); con la caché de buildx de GitHub (`cache-from: type=gha`), de 15 a 30 s. Más el stack core (~30 s) y el smoke (~1 min), unos 3 a 4 minutos por push en total.
 - **D-D:** job nuevo, o un paso más al final del job `integration`, que comparte el runner pero alarga ese job.
