@@ -1,6 +1,6 @@
 # Task 3.3 STEP 1 — Verificaciones previas (E3) y diseño
 
-Estado: **aprobado en el DETENTE 3.3.b con los cambios de la sección "Decisiones del DETENTE 3.3.b"** (al final), que prevalecen sobre el resto del documento donde difieran. Fuente: `docs/internal/claude_code_briefings/phase3_task3.3_step1_benchmark_implementation.md`, secciones 1.0 y 1.1. Las enmiendas del 2026-10-09 están en `docs/internal/benchmark_protocol_proposal.md`.
+Estado: **aprobado en el DETENTE 3.3.b con los cambios de la sección "Decisiones del DETENTE 3.3.b", y en el DETENTE 3.3.d con los de "Decisiones del DETENTE 3.3.d"** (al final). Prevalecen sobre el resto del documento donde difieran, y las del 3.3.d sobre las del 3.3.b. Fuente: `docs/internal/claude_code_briefings/phase3_task3.3_step1_benchmark_implementation.md`, secciones 1.0 y 1.1. Las enmiendas del 2026-10-09 están en `docs/internal/benchmark_protocol_proposal.md`.
 
 ## 1.0 Estado
 
@@ -273,8 +273,10 @@ Anthony aprobó el DETENTE 3.3.b con estos cambios. Prevalecen sobre las seccion
 - `t_visible` es el instante (reloj de pared de la VM) en que el medidor, un consumidor de `telemetry.raw` en un contenedor de la misma VM, recibe el registro.
 
 Se publica como p50/p95/p99 a una tasa fija declarada, junto con `fetch.wait.max.ms` del medidor. Se descompone en dos partes, que suman F1:
-- **Parte del bridge: `CreateTime − ts`.** `CreateTime` es el timestamp que el productor del bridge pone en el registro al llamar a `produce()`, en milisegundos y con el reloj del contenedor del bridge, que es el mismo que el de la VM (propuesta, 2.3). Incluye MQTT, la cola del bridge, la validación y la serialización. Lo que tarda el productor en enviar y obtener el ack (linger incluido) **no** está en esta parte.
-- **Parte de lectura: `t_visible − CreateTime`.** Incluye el linger, el envío, el append en el broker y el fetch del medidor.
+Nombres corregidos en el DETENTE 3.3.d: la "parte del bridge" pasa a llamarse **`ingest`** y la "parte de lectura", **`produce_to_visible`**. Ver la sección del 3.3.d.
+
+- **Parte del bridge (`ingest`): `CreateTime − ts`.** `CreateTime` es el timestamp que el productor del bridge pone en el registro al llamar a `produce()`, en milisegundos y con el reloj del contenedor del bridge, que es el mismo que el de la VM (propuesta, 2.3). Incluye MQTT, la cola del bridge, la validación y la serialización. Lo que tarda el productor en enviar y obtener el ack (linger incluido) **no** está en esta parte.
+- **Parte de lectura (`produce_to_visible`): `t_visible − CreateTime`.** Incluye el linger, el envío, el append en el broker y el fetch del medidor.
 
 Los dos timestamps tienen resolución de 1 ms (`ts` lo trunca el generador, y `CreateTime` es un entero de ms), así que cada parte tiene ±1 ms de error de cuantización.
 
@@ -296,3 +298,45 @@ Un percentil, o la fracción por debajo de un umbral (D8), se recalcula con un e
 ### Alcance de la 1.2
 
 La 1.2 implementa la contenerización (D-B a D-D). D-F, D-G, los requisitos añadidos y D-A (la config generada) se implementan en la 1.3, junto con el generador y el arnés.
+
+## Decisiones del DETENTE 3.3.d
+
+Anthony aprobó el DETENTE 3.3.d con estas correcciones. Prevalecen sobre el resto del documento.
+
+### 1. Nivel de log del bridge
+
+- **Toda corrida usa INFO, el valor por defecto del producto** (`bridge/mqtt_to_kafka/__main__.py:138`), que registra una línea `message_delivered` por mensaje (`:357`). Esto incluye la escalera de throughput, cuya cifra es la principal: mide el producto tal como se distribuye. `config/benchmark.yaml`: `bridge.log_level_latency` y `log_level_throughput` valen INFO.
+- **El plan original medía la escalera en WARNING** (`log_level_throughput: WARNING`), para que el log no cargara al bridge. Se cambia porque así se medía un bridge configurado de forma distinta al producto, y la cifra publicada no habría correspondido a lo que ejecuta quien clona el repo.
+- **Bloque de sensibilidad nuevo:** tras E2, el escalón candidato y el siguiente se repiten con el bridge en WARNING (`bridge.log_level_sensitivity`), `throughput.sensitivity_repetitions` veces cada uno (1 en la config). Sirve para cuantificar el coste del log por mensaje. El arnés lo lanza con `run --mode throughput --sensitivity`, y el informe lo compara con la escalera.
+- **El alarm consumer** corre en INFO tanto en el producto como en el benchmark, y no registra nada por mensaje: solo una línea por alarma.
+
+### 2. Descomposición de F1: nombres
+
+- **`ingest` = `CreateTime − ts`:** publicación MQTT, Mosquitto, cola del bridge, validación y serialización, hasta la llamada a `produce()`.
+- **`produce_to_visible` = `t_visible − CreateTime`:** el `linger.ms` de librdkafka, la petición de produce, el append en el broker con el avance del high watermark, y el fetch del medidor. No espera a que el ack vuelva al bridge, así que no es lo mismo que F4 (`produce_to_ack`). **Lo domina `linger.ms`** (5 ms por defecto).
+- `CreateTime` lo fija librdkafka al llamar a `produce()`: el bridge no pasa ningún `timestamp`, y el valor por defecto de confluent-kafka es "current time".
+- Los ficheros pasan a ser `latency_ingest.json` y `latency_produce_to_visible.json`. El informe explica qué contiene cada parte.
+
+### 3. Calibración del generador y del medidor
+
+El primer bloque del STEP 2 mide la tasa máxima que sostienen el generador y el medidor por separado (`config/benchmark.yaml: calibration`):
+- **Generador** (`run --mode calibrate-generator --rate R`): publica a Mosquitto sin ningún bridge suscrito, a cada tasa de `calibration.generator_rates_per_s`. Sostiene una tasa si su retraso queda dentro de `generator.max_late_*` y Mosquitto confirma todos los mensajes.
+- **Medidor** (`run --mode calibrate-meter`): `bench/loader.py` precarga `calibration.meter_records` registros en `telemetry.raw`, y el medidor los lee desde el principio (`--from-beginning --expect N`). Su tasa es registros entre segundos, del primero al último.
+- **La escalera se recorta** a la menor de las dos tasas máximas (`criteria.cap_ladder`), y el informe lo indica: una cifra en el tope está limitada por las herramientas de medida, no por el pipeline.
+
+### 4. Resolución de la escalera
+
+Cuando la escalera encuentra el último escalón que pasa y el primero que falla, se corre **un escalón intermedio** entre ambos antes de las repeticiones E2 (`criteria.intermediate_step`: su punto medio, redondeado a múltiplo de 50 msg/s cuando cae estrictamente entre los dos). El informe indica cuál falta.
+
+### 5. Camino a ThingsBoard
+
+- **El STEP 2 corre solo F1 a F4.**
+- **F5 y F6** tendrán después un modo reducido del arnés, en un step aparte.
+- **F7** (tiempo de drenaje tras una caída de ThingsBoard) pasa al backlog (`docs/internal/phase3_backlog.md`): necesita una parada controlada de ThingsBoard, que ignora SIGTERM.
+
+### 6. Notas para el informe de cierre de la Task 3.3
+
+Registradas en `docs/internal/phase3_backlog.md`, sección del informe de cierre:
+- las funciones de E/S del arnés llevan `pragma: no cover`, así que la cifra de cobertura no las incluye;
+- la tolerancia de la pendiente del lag es de 0,001 s/s.
+
