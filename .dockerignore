@@ -1,0 +1,17 @@
+# Build context of the pipeline images (docker/). An allowlist: everything is
+# excluded, then only what the images copy is let back in, so .env, .venv,
+# node_modules, tests, docs and results can never reach an image.
+*
+!requirements.txt
+!package.json
+!package-lock.json
+!common/
+!config/
+!schemas/
+!bridge/
+!edge/
+!broker/
+!processing/alarm_consumer/
+!processing/thingsboard_sink/
+**/__pycache__
+**/*.pyc
