@@ -2,15 +2,25 @@
 
 Runs in a container of the benchmark image, on the same VM clock as the generator (protocol 2.3). A consumer
 of its own reads telemetry.raw from the end offsets at its start (the harness starts it before the generator),
-decodes each record and, for records whose ts falls in the measured window, adds to three fixed histograms:
+decodes each record and, for records whose ts falls in the measured window, adds to three fixed histograms
+(names approved at DETENTE 3.3.d):
 
-    e2e         visible - ts           F1: scheduled instant -> visible to a consumer
-    bridge      CreateTime - ts        the bridge's share: MQTT, the bridge's queue, validation, serialisation
-    read        visible - CreateTime   the read share: linger, send, broker append, fetch
+    e2e                 visible - ts           F1: scheduled instant -> visible to a consumer
+    ingest              CreateTime - ts        MQTT publish, Mosquitto, the bridge's queue, validation and
+                                               serialisation, up to the bridge's produce() call
+    produce_to_visible  visible - CreateTime   librdkafka's linger.ms, the produce request, the broker's append
+                                               and high-watermark advance, and this consumer's fetch; it does not
+                                               wait for the acknowledgement's return to the bridge. Dominated by
+                                               linger.ms (5 ms by default)
 
 visible is the wall clock when the consumer returned the record; CreateTime is the producer timestamp the
-bridge's librdkafka puts on the record at produce(). Both ts and CreateTime are whole milliseconds, so each
-share carries +-1 ms of quantisation.
+bridge's librdkafka puts on the record when produce() is called (confluent-kafka: "Default value is current
+time"; the bridge passes none). Both ts and CreateTime are whole milliseconds, so each share carries +-1 ms of
+quantisation.
+
+Calibration (owner, DETENTE 3.3.d): with --from-beginning --expect N the meter reads N records preloaded into
+telemetry.raw (bench/loader.py) as fast as it can and reports its own rate, records / seconds from the first
+record to the Nth; the ladder is capped at it.
 
 It also tracks, for every record of the run (window or not), each asset's seq: distinct, duplicates and the
 highest seq, for the integrity check; and a per-second series (records visible, worst e2e). On SIGTERM it
@@ -78,7 +88,7 @@ class Window:
 class Meter:
     def __init__(self, window: Window):
         self.window = window
-        self.e2e, self.bridge, self.read = Histogram(), Histogram(), Histogram()
+        self.e2e, self.ingest, self.produce_to_visible = Histogram(), Histogram(), Histogram()
         self.seqs = SeqTracker()
         self.records = 0
         self.in_window = 0
@@ -96,8 +106,8 @@ class Meter:
             self.in_window += 1
             self.e2e.add(e2e)
             if create_ms is not None:
-                self.bridge.add(create_ms - ts_ms)
-                self.read.add(visible_ms - create_ms)
+                self.ingest.add(create_ms - ts_ms)
+                self.produce_to_visible.add(visible_ms - create_ms)
 
     def result(self) -> dict:
         return {
@@ -105,8 +115,10 @@ class Meter:
             "records": self.records, "records_in_window": self.in_window,
             "distinct": self.seqs.distinct, "duplicates": self.seqs.duplicates, "gaps": self.seqs.gaps(),
             "max_seq_per_asset": self.seqs.max_seq,
-            "histograms": {"e2e": self.e2e.to_json(), "bridge": self.bridge.to_json(), "read": self.read.to_json()},
-            "summaries": {"e2e": self.e2e.summary(), "bridge": self.bridge.summary(), "read": self.read.summary()},
+            "histograms": {"e2e": self.e2e.to_json(), "ingest": self.ingest.to_json(),
+                           "produce_to_visible": self.produce_to_visible.to_json()},
+            "summaries": {"e2e": self.e2e.summary(), "ingest": self.ingest.summary(),
+                          "produce_to_visible": self.produce_to_visible.summary()},
             "series": [[s, c, round(w, 3)] for s, (c, w) in sorted(self.series.items())],
         }
 
@@ -117,6 +129,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--warmup", type=float, required=True)
     p.add_argument("--measured", type=float, required=True)
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--from-beginning", action="store_true", help="calibration: read the topic from its first record")
+    p.add_argument("--expect", type=int, help="calibration: stop after this many records and report the meter's rate")
     p.add_argument("--kafka-bootstrap", default=os.environ.get("KAFKA_BOOTSTRAP", "localhost:9092"))
     p.add_argument("--schema-registry-url", default=os.environ.get("SCHEMA_REGISTRY_URL", "http://localhost:8081"))
     return p.parse_args(argv)
@@ -139,7 +153,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - runs in a 
                          "enable.auto.commit": False, "fetch.wait.max.ms": bench.meter_fetch_wait_max_ms,
                          "logger": logging.getLogger("librdkafka")})
     meta = consumer.list_topics(topic, timeout=10).topics[topic]
-    starts = [TopicPartition(topic, p, consumer.get_watermark_offsets(TopicPartition(topic, p), timeout=10)[1])
+    which = 0 if args.from_beginning else 1  # low or high watermark
+    starts = [TopicPartition(topic, p, consumer.get_watermark_offsets(TopicPartition(topic, p), timeout=10)[which])
               for p in meta.partitions]
     consumer.assign(starts)
     decode = AvroDeserializer(SchemaRegistryClient({"url": args.schema_registry_url}))
@@ -147,8 +162,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - runs in a 
     meter = Meter(Window(args.t0_ms, args.warmup, args.measured))
     log.info("meter_ready", extra={"topic": topic, "start_offsets": {tp.partition: tp.offset for tp in starts},
                                    "fetch_wait_max_ms": bench.meter_fetch_wait_max_ms})
-    errors = 0
-    while not stop["now"]:
+    errors, first_s, last_s = 0, None, None
+    while not stop["now"] and not (args.expect and meter.records >= args.expect):
         # poll(), one record at a time: it returns as soon as a record is there. consume(num_messages=N) waits
         # for N records or its timeout, which at low rates added up to the whole timeout to every record (the
         # first STEP 1 trial: a read share of 95 ms against a produce-to-ack of 6 ms).
@@ -163,8 +178,14 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - runs in a 
         kind, create_ms = msg.timestamp()
         meter.record(value["asset_id"], value["seq"], int(value["ts"].timestamp() * 1000),
                      create_ms if kind == 1 else None, visible_ms)  # 1: TIMESTAMP_CREATE_TIME
+        first_s = visible_ms / 1000 if first_s is None else first_s
+        last_s = visible_ms / 1000
     consumer.close()
     result = {**meter.result(), "consumer_errors": errors, "fetch_wait_max_ms": bench.meter_fetch_wait_max_ms}
+    if args.expect:
+        elapsed = (last_s - first_s) if first_s is not None and last_s > first_s else None
+        result["calibration"] = {"expected": args.expect, "read": meter.records, "elapsed_s": elapsed,
+                                 "records_per_s": round(meter.records / elapsed, 1) if elapsed else None}
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "meter.json").write_text(json.dumps(result) + "\n", encoding="utf-8")
     log.info("meter_finished", extra={k: result[k] for k in ("records", "records_in_window", "distinct", "duplicates", "gaps")})

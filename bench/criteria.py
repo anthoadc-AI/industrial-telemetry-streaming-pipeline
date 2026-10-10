@@ -120,6 +120,37 @@ def ladder(runs: list[RunInput], t: Thresholds) -> LadderResult:
     return LadderResult(best, False, None, steps)
 
 
+def intermediate_step(last_pass: float, first_fail: float) -> float:
+    """The step run between the last passing and the first failing step, before E2 (owner, DETENTE 3.3.d).
+
+    Their midpoint, rounded to a multiple of 50 msg/s when that stays strictly between them.
+    """
+    if not last_pass < first_fail:
+        raise ValueError("last_pass must be below first_fail")
+    mid = (last_pass + first_fail) / 2
+    rounded = round(mid / 50) * 50
+    return float(rounded) if last_pass < rounded < first_fail else mid
+
+
+def intermediate_needed(result: LadderResult, ladder_per_s: tuple[float, ...]) -> float | None:
+    """The intermediate step still to run: the ladder stopped between two consecutive configured steps."""
+    if result.max_sustainable_rate is None or result.first_failure is None:
+        return None
+    best, failed = result.max_sustainable_rate, result.first_failure[0]
+    steps = sorted(ladder_per_s)
+    if best in steps and failed in steps and steps.index(failed) == steps.index(best) + 1:
+        return intermediate_step(best, failed)
+    return None
+
+
+def cap_ladder(ladder_per_s: tuple[float, ...], max_rate: float | None) -> tuple[tuple[float, ...], bool]:
+    """The ladder limited to the calibrated maximum of the generator and the meter (owner, DETENTE 3.3.d)."""
+    if max_rate is None:
+        return tuple(ladder_per_s), False
+    kept = tuple(r for r in ladder_per_s if r <= max_rate)
+    return kept, len(kept) < len(ladder_per_s)
+
+
 def confirmed(repetitions: list[RunInput], t: Thresholds) -> tuple[bool, list[list[str]]]:
     """E2: a candidate step stands only if every one of its repetitions is valid and sustainable."""
     verdicts = [evaluate(r, t) for r in repetitions]

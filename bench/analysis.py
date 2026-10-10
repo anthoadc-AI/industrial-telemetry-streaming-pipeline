@@ -132,17 +132,54 @@ def run_seconds(bench: BenchmarkConfig, measured_s: float | None = None) -> floa
     return SETUP_S + bench.warmup_s + measured + DRAIN_TYPICAL_S + TEARDOWN_S + bench.cooldown_s
 
 
+# The meter calibration's load and read rates are assumptions for the estimate only, not measurements.
+ASSUMED_LOAD_RATE_PER_S = 10_000
+ASSUMED_METER_RATE_PER_S = 10_000
+
+
 def plan(bench: BenchmarkConfig) -> dict:
-    """Every run of STEP 2 per E2, and the time on AC power: the ladder's repetitions depend on where it stops, so
-    the estimate takes the worst case (repetitions at the two highest steps)."""
-    runs = [{"mode": "latency", "rate_per_s": r, "repetition": k + 1}
-            for r in bench.latency_rates_per_s for k in range(bench.latency_repetitions)]
-    runs += [{"mode": "throughput", "rate_per_s": r, "repetition": 1} for r in bench.ladder_per_s]
-    worst = bench.ladder_per_s[-2:] if len(bench.ladder_per_s) > 1 else bench.ladder_per_s
-    reps = [{"mode": "throughput", "rate_per_s": r, "repetition": k + 2, "conditional": "E2: candidate step and the next"}
-            for r in worst for k in range(bench.repetitions_at_candidate - 1)]
-    per_run = run_seconds(bench)
-    total = per_run * (len(runs) + len(reps))
-    return {"runs": runs, "conditional_runs": reps, "seconds_per_run": per_run,
-            "total_hours_worst_case": round(total / 3600, 2),
-            "total_hours_without_repetitions": round(per_run * len(runs) / 3600, 2)}
+    """The blocks of STEP 2 (owner, DETENTE 3.3.d) with their runs and the AC time, expected and worst case.
+
+    1 calibration: the generator alone at each calibration rate, then the meter alone; the ladder is capped at the
+      lower of the two maxima (bench/criteria.py: cap_ladder);
+    2 latency: each latency rate, repetitions times, bridge at INFO;
+    3 ladder: one run per step, bridge at INFO (the product default), plus one intermediate step between the last
+      passing and the first failing step;
+    4 E2: repetitions_at_candidate - 1 more runs at the candidate and at the next step;
+    5 sensitivity: sensitivity_repetitions runs at the candidate and the next step with the bridge at
+      log_level_sensitivity.
+
+    Expected case: the generator calibration stops halfway up its rates and the ladder fails halfway up. Worst case:
+    every calibration rate and every ladder step run, the last one failing.
+    """
+    pipeline_s = run_seconds(bench)
+    gen_cal_s = SETUP_S + bench.calibration_generator_measured_s + TEARDOWN_S + bench.cooldown_s
+    meter_cal_s = (SETUP_S + bench.calibration_meter_records / ASSUMED_LOAD_RATE_PER_S
+                   + bench.calibration_meter_records / ASSUMED_METER_RATE_PER_S + TEARDOWN_S + bench.cooldown_s)
+    n_gen, n_ladder = len(bench.calibration_generator_rates_per_s), len(bench.ladder_per_s)
+    e2e_reps = 2 * (bench.repetitions_at_candidate - 1)
+    sens = 2 * bench.sensitivity_repetitions
+    latency = len(bench.latency_rates_per_s) * bench.latency_repetitions
+
+    def case(gen_runs: int, ladder_runs: int) -> dict:
+        blocks = [
+            {"block": "1 calibration", "runs": gen_runs + 1, "seconds": gen_runs * gen_cal_s + meter_cal_s},
+            {"block": "2 latency (INFO)", "runs": latency, "seconds": latency * pipeline_s},
+            {"block": "3 ladder (INFO) + intermediate step", "runs": ladder_runs + 1, "seconds": (ladder_runs + 1) * pipeline_s},
+            {"block": "4 E2 repetitions", "runs": e2e_reps, "seconds": e2e_reps * pipeline_s},
+            {"block": "5 log-level sensitivity", "runs": sens, "seconds": sens * pipeline_s},
+        ]
+        total = sum(b["seconds"] for b in blocks)
+        return {"blocks": [{**b, "hours": round(b["seconds"] / 3600, 2)} for b in blocks],
+                "runs": sum(b["runs"] for b in blocks), "hours": round(total / 3600, 2)}
+
+    return {
+        "calibration_generator_rates_per_s": list(bench.calibration_generator_rates_per_s),
+        "calibration_meter_records": bench.calibration_meter_records,
+        "latency_rates_per_s": list(bench.latency_rates_per_s), "latency_repetitions": bench.latency_repetitions,
+        "ladder_per_s": list(bench.ladder_per_s), "ladder_note": "capped at the calibrated maximum if lower",
+        "seconds_per_pipeline_run": pipeline_s, "seconds_per_generator_calibration": gen_cal_s,
+        "seconds_meter_calibration_estimated": meter_cal_s,
+        "expected": case(max(1, n_gen // 2), max(1, n_ladder // 2)),
+        "worst": case(n_gen, n_ladder),
+    }

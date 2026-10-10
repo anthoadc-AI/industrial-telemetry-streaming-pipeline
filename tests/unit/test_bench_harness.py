@@ -41,8 +41,8 @@ def test_meter_window_and_shares():
     r = m.result()
     assert (r["records"], r["records_in_window"], r["distinct"], r["duplicates"], r["gaps"]) == (4, 2, 4, 0, 0)
     assert r["window"] == {"start_ms": 11_000, "end_ms": 13_000}
-    assert r["summaries"]["e2e"]["n"] == 2 and r["summaries"]["bridge"]["n"] == 1
-    assert Histogram.from_json(r["histograms"]["read"]).max_ms == 8.5
+    assert r["summaries"]["e2e"]["n"] == 2 and r["summaries"]["ingest"]["n"] == 1
+    assert Histogram.from_json(r["histograms"]["produce_to_visible"]).max_ms == 8.5
     assert r["series"][0][:2] == [10, 1]
     assert 11_000 in m.window and 13_000 not in m.window
 
@@ -108,10 +108,15 @@ def test_run_input_and_plan():
     ri = analysis.run_input(100.0, meter_result(), gen_result(), [(0, 1)], ["x"])
     assert (ri.sent, ri.seen_distinct, ri.environment_problems, ri.e2e.total) == (100, 100, ["x"], 1)
     p = analysis.plan(BENCH)
-    assert len(p["runs"]) == len(BENCH.latency_rates_per_s) * BENCH.latency_repetitions + len(BENCH.ladder_per_s)
-    assert len(p["conditional_runs"]) == 2 * (BENCH.repetitions_at_candidate - 1)
-    assert p["seconds_per_run"] == analysis.run_seconds(BENCH)
-    assert p["total_hours_worst_case"] > p["total_hours_without_repetitions"]
+    worst, expected = p["worst"], p["expected"]
+    assert [b["block"][0] for b in worst["blocks"]] == ["1", "2", "3", "4", "5"]  # calibration first (DETENTE 3.3.d)
+    blocks = {b["block"][0]: b["runs"] for b in worst["blocks"]}
+    assert blocks["1"] == len(BENCH.calibration_generator_rates_per_s) + 1  # every generator rate, then the meter
+    assert blocks["2"] == len(BENCH.latency_rates_per_s) * BENCH.latency_repetitions
+    assert blocks["3"] == len(BENCH.ladder_per_s) + 1  # plus the intermediate step
+    assert blocks["4"] == 2 * (BENCH.repetitions_at_candidate - 1) and blocks["5"] == 2 * BENCH.sensitivity_repetitions
+    assert worst["runs"] == sum(blocks.values()) and expected["runs"] < worst["runs"] and expected["hours"] < worst["hours"]
+    assert p["seconds_per_pipeline_run"] == analysis.run_seconds(BENCH)
     assert analysis.run_seconds(BENCH, measured_s=30) < analysis.run_seconds(BENCH)
 
 
@@ -128,6 +133,8 @@ def test_override_pins_mounts_and_adds_the_bench_services(tmp_path):
         assert o[name]["profiles"] == ["bench"] and o[name]["image"] == compose.BENCH_IMAGE and o[name]["read_only"]
         assert {"target": "/out", "read_only": False}.items() <= o[name]["volumes"][1].items()
     assert "${BENCH_T0_MS:-}" in o["generator"]["command"] and "${BENCH_T0_MS:-}" in o["meter"]["command"]
+    assert o["loader"]["command"] == ["--count", "${BENCH_COUNT:-}"] and o["loader"]["cpuset"] == "6"
+    assert "--from-beginning" in o["meter-calibration"]["command"]
 
 
 # --- generator and harness helpers ---------------------------------------------------------
@@ -140,7 +147,12 @@ def test_generator_args_and_acks(tmp_path):
     acks.on_publish(None, None, 1, None, None)
     assert acks.count == 1
     m = meter.parse_args(["--t0-ms", "1", "--warmup", "30", "--measured", "300", "--out", str(tmp_path)])
-    assert (m.warmup, m.measured) == (30.0, 300.0)
+    assert (m.warmup, m.measured, m.from_beginning, m.expect) == (30.0, 300.0, False, None)
+    m = meter.parse_args(["--t0-ms", "0", "--warmup", "0", "--measured", "0", "--out", str(tmp_path), "--from-beginning",
+                          "--expect", "10"])
+    assert (m.from_beginning, m.expect) == (True, 10)
+    from bench import loader
+    assert loader.parse_args(["--count", "5"]).count == 5
 
 
 def test_harness_run_id_and_compose_command(tmp_path):
@@ -155,7 +167,7 @@ def test_harness_run_id_and_compose_command(tmp_path):
 
 
 def write_run(root: Path, name: str, mode: str, rate: float, latency: float, trial: bool = False, repetition: int = 1,
-              problems=None) -> None:
+              problems=None, sensitivity: bool = False) -> None:
     d = root / name
     d.mkdir()
     e2e, late = Histogram(), Histogram()
@@ -164,7 +176,9 @@ def write_run(root: Path, name: str, mode: str, rate: float, latency: float, tri
         late.add(0.4)
     window = {"start_ms": 0, "end_ms": 10_000}
     (d / "manifest.json").write_text(json.dumps({"mode": mode, "trial": trial, "rate_per_s": rate, "repetition": repetition,
-                                                 "window": window, "run_problems": problems or []}), encoding="utf-8")
+                                                 "window": window, "run_problems": problems or [], "sensitivity": sensitivity,
+                                                 "bridge_log_level": "WARNING" if sensitivity else "INFO"}),
+                                     encoding="utf-8")
     (d / "latency_e2e.json").write_text(json.dumps(e2e.to_json()), encoding="utf-8")
     (d / "latency_generator_late.json").write_text(json.dumps(late.to_json()), encoding="utf-8")
     (d / "counters.json").write_text(json.dumps({"sent": 200, "meter_distinct": 200}), encoding="utf-8")
@@ -182,10 +196,12 @@ def test_report_renders_runs_ladder_and_recomputes_the_cut(tmp_path):
     write_run(tmp_path, "e-1000", "throughput", 1000, 1500.0)
     runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
     t = criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0)
-    text = report.render(runs, t)
-    assert "| a-trial | trial | 5 | yes | no |" in text  # a trial is never publishable
+    text = report.render(runs, t, (250.0, 500.0, 1000.0, 2000.0))
+    assert "| a-trial | trial | 5 | INFO | yes | no |" in text  # a trial is never publishable
     assert "- 1000/s: not sustainable - p99 not below 1000 ms" in text
+    assert "Next: the intermediate step 750/s, between 500 and 1000" in text  # DETENTE 3.3.d
     assert "Candidate: 500/s; repetitions 1; not yet confirmed (E2)." in text
+    assert "dominated by linger.ms" in text and "No calibration runs." in text
     looser = report.render(runs, criteria.Thresholds(2000, 1.0, 0.001, 0, 5.0, 100.0))
     assert "Candidate: 1000/s" in looser  # same results, another threshold, no new run
     assert "No throughput runs." in report.render(runs[:2], t)
@@ -204,3 +220,33 @@ def test_report_no_sustainable_step_and_generator_limit(tmp_path):
     write_run(tmp_path, "c-100", "throughput", 100, 10.0)
     runs = [report.load_run(tmp_path / n) for n in ("c-100", "b-500")]
     assert "Limited by the generator" in report.render(runs, t)
+
+
+def write_calibration(root: Path, name: str, mode: str, rate: float, sustained: bool = True, records_per_s=None) -> None:
+    d = root / name
+    d.mkdir()
+    late = Histogram()
+    late.add(0.3)
+    manifest = {"mode": mode, "rate_per_s": rate, "trial": False, "sustained": sustained, "valid": True}
+    if mode == "calibrate-meter":
+        manifest["calibration"] = {"read": 1000, "elapsed_s": 1000 / records_per_s, "records_per_s": records_per_s}
+    (d / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    if mode == "calibrate-generator":
+        (d / "latency_generator_late.json").write_text(json.dumps(late.to_json()), encoding="utf-8")
+
+
+def test_report_calibration_caps_the_ladder_and_sensitivity(tmp_path):
+    write_calibration(tmp_path, "c1", "calibrate-generator", 1000)
+    write_calibration(tmp_path, "c2", "calibrate-generator", 2000)
+    write_calibration(tmp_path, "c3", "calibrate-generator", 4000, sustained=False)
+    write_calibration(tmp_path, "c4", "calibrate-meter", 600000, records_per_s=3000.0)
+    write_run(tmp_path, "t1", "throughput", 250, 20.0)
+    write_run(tmp_path, "t2", "throughput", 250, 15.0, sensitivity=True)
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    t = criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0)
+    text = report.render(runs, t, (250.0, 500.0, 1000.0, 2000.0, 4000.0))
+    assert "generator at 4000/s: not sustained" in text and "meter: 1000 records" in text
+    assert "Ladder cap: 2000/s (the lower of generator 2000/s and meter 3000/s)." in text
+    assert "steps above 2000/s are not run" in text
+    assert "| 250 | INFO | 1 | 1 of 1 |" in text and "| 250 | WARNING | 1 | 1 of 1 |" in text
+    assert "## Throughput ladder" in text and "- 250/s: sustainable" in text  # the sensitivity run is not on the ladder

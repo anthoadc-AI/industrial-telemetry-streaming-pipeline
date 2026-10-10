@@ -6,9 +6,10 @@ Layered over docker-compose.yml (docker compose -f docker-compose.yml -f <run>/c
 - mounts the run's generated config/ read-only over /app/config of the bridge, the alarm consumer, the generator
   and the meter (D-A clones, D2 linger), so they all see the same assets and settings;
 - sets the bridge's log level (INFO when F4 needs its per-message lines, WARNING otherwise);
-- adds the generator and the meter (profile bench, the benchmark image), whose run-specific values come from
+- adds the generator and the meter (profile bench, the benchmark image), and for the calibration the loader and
+  meter-calibration, whose run-specific values come from
   environment variables the harness sets: BENCH_RATE, BENCH_DURATION_S, BENCH_T0_MS, BENCH_WARMUP_S,
-  BENCH_MEASURED_S (empty by default, so other compose commands with the override print no warning).
+  BENCH_MEASURED_S, BENCH_COUNT (empty by default, so other compose commands with the override print no warning).
 """
 
 from __future__ import annotations
@@ -53,4 +54,18 @@ def override(bench: BenchmarkConfig, config_dir: Path, out_dir: Path, bridge_log
         "volumes": [config_mount, out_mount],
         "depends_on": {"broker": {"condition": "service_healthy"}, "schema-registry": {"condition": "service_healthy"}},
         **HARDENING})
+    # Calibration (owner, DETENTE 3.3.d): the loader preloads BENCH_COUNT records; meter-calibration reads them
+    # from the beginning and reports its own rate. Both on the meter's vCPUs.
+    kafka_env = {"KAFKA_BOOTSTRAP": "broker:29092", "SCHEMA_REGISTRY_URL": "http://schema-registry:8081"}
+    kafka_deps = {"broker": {"condition": "service_healthy"}, "schema-registry": {"condition": "service_healthy"}}
+    for name, entrypoint, command in (
+            ("loader", ["python", "-m", "bench.loader"], ["--count", "${BENCH_COUNT:-}"]),
+            ("meter-calibration", ["python", "-m", "bench.meter"],
+             ["--t0-ms", "0", "--warmup", "0", "--measured", "0", "--from-beginning", "--expect", "${BENCH_COUNT:-}",
+              "--out", "/out"])):
+        services[name] = {"image": BENCH_IMAGE, "pull_policy": "never", "profiles": ["bench"], "entrypoint": entrypoint,
+                          "command": command, "environment": dict(kafka_env), "volumes": [config_mount, out_mount],
+                          "depends_on": kafka_deps, **HARDENING}
+        if "meter" in bench.cpusets:
+            services[name]["cpuset"] = bench.cpusets["meter"]
     return {"services": services}

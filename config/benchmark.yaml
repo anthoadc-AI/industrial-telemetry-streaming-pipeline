@@ -35,6 +35,22 @@ throughput:
   # overrides) in a generated copy of config/, so every message meets the
   # alarm state machine. 20 clones of 5 assets: 100 assets.
   clones_per_asset: 20
+  # Log-level sensitivity (owner, DETENTE 3.3.d): after E2, the candidate step
+  # and the next are run again with the bridge at bridge.log_level_sensitivity,
+  # this many times each, to quantify the cost of the per-message log line.
+  sensitivity_repetitions: 1
+
+# Calibration (owner, DETENTE 3.3.d), the first block of STEP 2: the highest
+# rate the generator and the meter sustain on their own. The ladder is capped
+# at the lower of the two, and the report says so.
+calibration:
+  # The generator alone, publishing to Mosquitto with no bridge subscribed:
+  # the highest rate at which it stays within generator.max_late_*.
+  generator_rates_per_s: [1000, 2000, 4000, 6000, 8000, 12000]
+  generator_measured_s: 60
+  # The meter alone: this many records preloaded into telemetry.raw, then read
+  # and decoded as fast as it can; its rate is records / seconds.
+  meter_records: 600000
 
 generator:
   # The paho QoS 1 window: messages in flight before the broker's PUBACK.
@@ -85,10 +101,14 @@ cpu:
     zookeeper: "7"
 
 bridge:
-  # F4 needs the bridge's message_delivered line per message (INFO); the
-  # throughput runs keep it off (WARNING) so logging does not load the bridge.
+  # Every run uses INFO, the product default, which logs one message_delivered
+  # line per message (owner, DETENTE 3.3.d: the ladder's headline figure is the
+  # product as shipped; the first plan ran the ladder at WARNING, which measured
+  # a bridge configured unlike the product). The sensitivity block repeats the
+  # candidate step and the next at log_level_sensitivity.
   log_level_latency: INFO
-  log_level_throughput: WARNING
+  log_level_throughput: INFO
+  log_level_sensitivity: WARNING
   # Owner decision D2: null keeps librdkafka's default; a number is written
   # into the run's generated config/bridge.yaml (sensitivity runs only).
   linger_ms: null

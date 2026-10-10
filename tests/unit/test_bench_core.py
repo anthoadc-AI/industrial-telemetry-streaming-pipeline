@@ -238,6 +238,22 @@ def test_ladder_limited_by_the_generator():
     assert result.max_sustainable_rate == 250 and result.limited_by_generator
 
 
+def test_intermediate_step_and_cap():
+    assert criteria.intermediate_step(500, 1000) == 750.0
+    assert criteria.intermediate_step(4000, 6000) == 5000.0
+    assert criteria.intermediate_step(100, 120) == 110.0  # no multiple of 50 strictly between: the midpoint
+    with pytest.raises(ValueError):
+        criteria.intermediate_step(1000, 500)
+    ladder = (250.0, 500.0, 1000.0, 2000.0)
+    stopped = criteria.ladder([run_input(rate=250), run_input(rate=500), run_input(rate=1000, latency=2000)], T)
+    assert criteria.intermediate_needed(stopped, ladder) == 750.0
+    after = criteria.ladder([run_input(rate=500), run_input(rate=750, latency=2000), run_input(rate=1000, latency=2000)], T)
+    assert criteria.intermediate_needed(after, ladder) is None  # the intermediate step has been run
+    assert criteria.intermediate_needed(criteria.ladder([run_input(rate=250)], T), ladder) is None
+    assert criteria.cap_ladder(ladder, 1500) == ((250.0, 500.0, 1000.0), True)
+    assert criteria.cap_ladder(ladder, None) == (ladder, False) and criteria.cap_ladder(ladder, 5000) == (ladder, False)
+
+
 def test_ladder_all_sustainable_and_confirmation():
     result = criteria.ladder([run_input(rate=250), run_input(rate=500)], T)
     assert result.max_sustainable_rate == 500 and result.first_failure is None
@@ -278,6 +294,11 @@ def test_real_benchmark_config():
     assert b.criteria_p99_ms == 1000 and b.ladder_per_s[0] == 250 and b.clones_per_asset == 20
     assert b.fault_pattern.channel == "bearing_temperature_c" and b.bridge_linger_ms is None
     assert dict(b.cpusets)["bridge"] == "3" and b.trial_measured_s == 30
+    # DETENTE 3.3.d: every run at INFO, the product default; WARNING only for the sensitivity block.
+    levels = (b.bridge_log_level_latency, b.bridge_log_level_throughput, b.bridge_log_level_sensitivity)
+    assert levels == ("INFO", "INFO", "WARNING")
+    assert b.sensitivity_repetitions == 1 and b.calibration_generator_rates_per_s[0] == 1000
+    assert b.calibration_meter_records == 600000
 
 
 def benchmark_broken(tmp_path: Path, old: str, new: str) -> Path:
@@ -305,6 +326,9 @@ def benchmark_broken(tmp_path: Path, old: str, new: str) -> Path:
     ("  log_level_latency: INFO", "  log_level_latency: LOUD",
      "benchmark.yaml.bridge.log_level_latency: must be one of ['DEBUG', 'INFO', 'WARNING', 'ERROR']"),
     ("  linger_ms: null", "  linger_ms: -1", "benchmark.yaml.bridge.linger_ms: must be >= 0"),
+    ("  meter_records: 600000", "  meter_records: 0", "benchmark.yaml.calibration.meter_records: expected an integer >= 1"),
+    ("  log_level_sensitivity: WARNING", "  log_level_sensitivity: QUIET",
+     "benchmark.yaml.bridge.log_level_sensitivity: must be one of ['DEBUG', 'INFO', 'WARNING', 'ERROR']"),
     ("meter:\n", "metre:\n", "benchmark.yaml: missing key(s) ['meter']"),
 ])
 def test_benchmark_config_rejections(tmp_path, old, new, message):

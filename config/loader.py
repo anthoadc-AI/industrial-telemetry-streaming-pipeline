@@ -584,6 +584,10 @@ class BenchmarkConfig:
     ladder_per_s: tuple[float, ...]
     repetitions_at_candidate: int
     clones_per_asset: int
+    sensitivity_repetitions: int
+    calibration_generator_rates_per_s: tuple[float, ...]
+    calibration_generator_measured_s: float
+    calibration_meter_records: int
     generator_max_inflight: int
     max_late_p99_ms: float
     max_late_max_ms: float
@@ -597,6 +601,7 @@ class BenchmarkConfig:
     cpusets: Mapping[str, str]
     bridge_log_level_latency: str
     bridge_log_level_throughput: str
+    bridge_log_level_sensitivity: str
     bridge_linger_ms: float | None
 
 
@@ -630,7 +635,8 @@ def load_benchmark_config(config_dir: Path | None = None, config: Config | None 
     config = config or load_config(config_dir, env={})
     w = "benchmark.yaml"
     data = _read_yaml(config_dir / w)
-    _keys(data, w, {"environment", "run", "latency", "throughput", "generator", "meter", "criteria", "cpu", "bridge"})
+    _keys(data, w, {"environment", "run", "latency", "throughput", "calibration", "generator", "meter", "criteria", "cpu",
+                    "bridge"})
 
     env = _mapping(data["environment"], f"{w}.environment")
     _keys(env, f"{w}.environment", {"require_ac_power", "min_host_free_memory_gb", "monitor_interval_s"})
@@ -641,7 +647,9 @@ def load_benchmark_config(config_dir: Path | None = None, config: Config | None 
     lat = _mapping(data["latency"], f"{w}.latency")
     _keys(lat, f"{w}.latency", {"rates_per_s", "repetitions"})
     thr = _mapping(data["throughput"], f"{w}.throughput")
-    _keys(thr, f"{w}.throughput", {"ladder_per_s", "repetitions_at_candidate", "clones_per_asset"})
+    _keys(thr, f"{w}.throughput", {"ladder_per_s", "repetitions_at_candidate", "clones_per_asset", "sensitivity_repetitions"})
+    cal = _mapping(data["calibration"], f"{w}.calibration")
+    _keys(cal, f"{w}.calibration", {"generator_rates_per_s", "generator_measured_s", "meter_records"})
     gen = _mapping(data["generator"], f"{w}.generator")
     _keys(gen, f"{w}.generator", {"max_inflight", "max_late_p99_ms", "max_late_max_ms", "fault_pattern"})
     fp = _mapping(gen["fault_pattern"], f"{w}.generator.fault_pattern")
@@ -654,7 +662,7 @@ def load_benchmark_config(config_dir: Path | None = None, config: Config | None 
     cpu = _mapping(data["cpu"], f"{w}.cpu")
     _keys(cpu, f"{w}.cpu", {"max_client_core_fraction", "cpusets"})
     bridge = _mapping(data["bridge"], f"{w}.bridge")
-    _keys(bridge, f"{w}.bridge", {"log_level_latency", "log_level_throughput", "linger_ms"})
+    _keys(bridge, f"{w}.bridge", {"log_level_latency", "log_level_throughput", "log_level_sensitivity", "linger_ms"})
 
     channel = _str(fp["channel"], f"{fw}.channel")
     if channel not in config.telemetry.channels:
@@ -676,7 +684,7 @@ def load_benchmark_config(config_dir: Path | None = None, config: Config | None 
     cpusets = {k: _cpuset(v, f"{w}.cpu.cpusets.{k}") for k, v in cpusets_raw.items()}
 
     levels = {}
-    for key in ("log_level_latency", "log_level_throughput"):
+    for key in ("log_level_latency", "log_level_throughput", "log_level_sensitivity"):
         if bridge[key] not in LOG_LEVELS:
             raise ConfigError(f"{w}.bridge.{key}: must be one of {list(LOG_LEVELS)}")
         levels[key] = bridge[key]
@@ -698,6 +706,11 @@ def load_benchmark_config(config_dir: Path | None = None, config: Config | None 
         ladder_per_s=_rates(thr["ladder_per_s"], f"{w}.throughput.ladder_per_s"),
         repetitions_at_candidate=_int(thr["repetitions_at_candidate"], f"{w}.throughput.repetitions_at_candidate", min_=1),
         clones_per_asset=_int(thr["clones_per_asset"], f"{w}.throughput.clones_per_asset", min_=1),
+        sensitivity_repetitions=_int(thr["sensitivity_repetitions"], f"{w}.throughput.sensitivity_repetitions", min_=0),
+        calibration_generator_rates_per_s=_rates(cal["generator_rates_per_s"], f"{w}.calibration.generator_rates_per_s"),
+        calibration_generator_measured_s=_num(cal["generator_measured_s"], f"{w}.calibration.generator_measured_s",
+                                              positive=True),
+        calibration_meter_records=_int(cal["meter_records"], f"{w}.calibration.meter_records", min_=1),
         generator_max_inflight=_int(gen["max_inflight"], f"{w}.generator.max_inflight", min_=1),
         max_late_p99_ms=_num(gen["max_late_p99_ms"], f"{w}.generator.max_late_p99_ms", positive=True),
         max_late_max_ms=_num(gen["max_late_max_ms"], f"{w}.generator.max_late_max_ms", positive=True),
@@ -711,6 +724,7 @@ def load_benchmark_config(config_dir: Path | None = None, config: Config | None 
         cpusets=_frozen(cpusets),
         bridge_log_level_latency=levels["log_level_latency"],
         bridge_log_level_throughput=levels["log_level_throughput"],
+        bridge_log_level_sensitivity=levels["log_level_sensitivity"],
         bridge_linger_ms=linger,
     )
 
