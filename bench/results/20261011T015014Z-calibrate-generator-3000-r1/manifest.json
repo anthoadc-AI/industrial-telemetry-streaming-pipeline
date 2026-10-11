@@ -1,0 +1,85 @@
+{
+ "run_id": "20261011T015014Z-calibrate-generator-3000-r1",
+ "mode": "calibrate-generator",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 3000.0,
+ "repetition": 1,
+ "assets": 100,
+ "clones_per_asset": 20,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T01:50:14.053624+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 5.97,
+  "git": {
+   "commit": "ac99840a6d5ca319532aea3e17e54468301c2c69",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 5.17,
+ "cpu_peak_percent": {
+  "generator": 70.95,
+  "schema-registry": 7.15,
+  "broker": 122.47,
+  "mosquitto": 6.08,
+  "zookeeper": 65.37
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "generator_late": {
+   "n": 180000,
+   "p50": 0.1,
+   "p95": 0.2,
+   "p99": 0.3,
+   "min": 0.0,
+   "max": 7.687091827392578,
+   "underflow": 0
+  }
+ },
+ "publishable": false,
+ "finished": "2026-10-11T01:51:51.855109+00:00",
+ "measured_s": 60.0,
+ "t0_ms": 1791683450726,
+ "valid": true,
+ "generator_saturated": false,
+ "sustained": true,
+ "stopped_early": false,
+ "counters": {
+  "planned": 180000,
+  "sent": 180000,
+  "acknowledged": 180000,
+  "send_cpu_s": 39.342,
+  "send_wall_s": 60.007
+ },
+ "problems": [],
+ "environment_problems": [],
+ "run_problems": []
+}
