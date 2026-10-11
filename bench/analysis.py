@@ -8,7 +8,12 @@
   committed), as (seconds since the window started, lag in messages);
 - the integrity check (protocol 5.1.8): sent = new telemetry.raw records = distinct (asset, seq) seen by the meter,
   duplicates and gaps counted, no new dead letter, the consumer caught up, alarms as the pattern predicts;
-- CPU per container: a client container above the configured share of one core flags the run;
+- CPU per container: an instrument (the generator or the meter) above the configured share of one core flags the
+  run; the system under test (bridge, alarm consumer) is judged by D8 alone, its CPU recorded as data (owner,
+  DETENTE 3.3.f);
+- clock quality (owner, DETENTE 3.3.f): the wall clock minus the monotonic clock, sampled inside a container during
+  the run: the largest backward step, the total drift, and how many negative latency samples follow a backward
+  step;
 - the run plan of STEP 2 with its duration estimate (amendment E2, cool-down pauses).
 """
 
@@ -21,7 +26,13 @@ from bench.criteria import RunInput
 from bench.histogram import Histogram
 from config.loader import BenchmarkConfig
 
-CLIENTS = ("bridge", "alarm-consumer", "generator", "meter")
+# The measuring instruments: their CPU above max_client_core_fraction invalidates a run (owner, DETENTE 3.3.b). Not
+# the system under test: applied to the bridge and the alarm consumer, the rule discarded exactly the runs that
+# showed their limit (block 3, 2000 msg/s; owner, DETENTE 3.3.f).
+INSTRUMENTS = ("generator", "meter")
+SYSTEM_UNDER_TEST = ("bridge", "alarm-consumer")
+# A step of the wall clock against the monotonic clock smaller than this is sampling noise, not a step.
+CLOCK_STEP_MIN_MS = 0.1
 
 
 def json_lines(text: str) -> list[dict]:
@@ -104,14 +115,41 @@ def integrity(generator: dict, meter: dict, raw_new: int, dlq_new: int, consumer
 
 def cpu_problems(cpu_samples: list[tuple[float, dict[str, float]]],
                  max_core_fraction: float) -> tuple[dict[str, float], list[str]]:
-    """Peak CPU per container (per cent of one core) and the clients above the limit."""
+    """Peak CPU per container (per cent of one core) and the instruments above the limit (a validity problem)."""
     peaks: dict[str, float] = {}
     for _, row in cpu_samples:
         for name, pct in row.items():
             peaks[name] = max(peaks.get(name, 0.0), pct)
     over = [f"{name} at {pct:.0f} % of a core" for name, pct in sorted(peaks.items())
-            if name in CLIENTS and pct > max_core_fraction * 100]
-    return peaks, ([f"CPU-bound client(s): {', '.join(over)}"] if over else [])
+            if name in INSTRUMENTS and pct > max_core_fraction * 100]
+    return peaks, ([f"CPU-bound instrument(s): {', '.join(over)}"] if over else [])
+
+
+def without_system_under_test_cpu(problems: list[str]) -> list[str]:
+    """Stored run problems without the CPU flag the old rule raised (DETENTE 3.3.f): manifests written before the
+    change flagged "CPU-bound client(s)", the bridge and the alarm consumer included. The report drops that flag and
+    re-applies the current rule to the stored CPU samples."""
+    return [p for p in problems if not p.startswith("CPU-bound client(s)")]
+
+
+def clock_quality(samples: list[tuple[float, float]], negatives: list[float],
+                  window_ms: float = 1000.0) -> dict:
+    """Wall clock minus monotonic clock, as (wall ms, offset ms) every ~100 ms, against the negative latency samples
+    (their wall ms). A backward step is a fall of the offset by at least CLOCK_STEP_MIN_MS between two samples: the
+    wall clock was set back, so a later timestamp can read earlier than one taken before it on another container
+    of the same VM. Negative samples are counted, never dropped; "after a backward step" means within window_ms
+    after one."""
+    deltas = [(t, off - prev) for (_, prev), (t, off) in zip(samples, samples[1:])]
+    backward = [(t, -d) for t, d in deltas if d <= -CLOCK_STEP_MIN_MS]
+    forward = [(t, d) for t, d in deltas if d >= CLOCK_STEP_MIN_MS]
+    aligned = sum(1 for n in negatives if any(0 <= n - t <= window_ms for t, _ in backward))
+    return {"samples": len(samples),
+            "largest_backward_step_ms": round(max((s for _, s in backward), default=0.0), 3),
+            "backward_steps": len(backward), "forward_steps": len(forward),
+            "total_drift_ms": round(samples[-1][1] - samples[0][1], 3) if len(samples) > 1 else 0.0,
+            "negative_samples": len(negatives), "negatives_after_a_backward_step": aligned,
+            "window_ms": window_ms}
+
 
 
 def run_input(rate: float, meter: dict, generator: dict, lag: list[tuple[float, float]], problems: list[str]) -> RunInput:

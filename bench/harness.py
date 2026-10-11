@@ -28,8 +28,12 @@ Every parameter comes from config/benchmark.yaml. A run:
    results), collects the components' logs, and checks for a system suspend in the Windows event log
    (Kernel-Power 42 or 107) and for a wall/monotonic clock jump;
 6. computes F1 (meter), F2 (consumer log), F4 (bridge log, INFO runs), integrity, validity and the D8 verdict,
-   writes manifest.json, latency_*.json histograms, series.csv and counters.json, and takes the stack down
-   (never with -v).
+   and the clock quality (the meter's samples of wall minus monotonic clock, DETENTE 3.3.f), writes manifest.json,
+   latency_*.json histograms, series.csv, clock.csv and counters.json, and takes the stack down (never with -v).
+
+A run's CPU limit (max_client_core_fraction) applies to the measuring instruments only, the generator and the
+meter; the bridge and the alarm consumer, the system under test, are judged by D8 alone, their CPU recorded as data
+(owner, DETENTE 3.3.f).
 
 Raw logs go to <run>/raw/, which is not versioned. Exit status: 0 for a valid run, 1 for an invalid one, 3 when
 the environment check refused to start.
@@ -63,6 +67,9 @@ ALL_PROFILES = ["--profile", "full", "--profile", "pipeline", "--profile", "pipe
 PY = sys.executable
 BOOTSTRAP = "localhost:9092"
 T0_LEAD_S = 8.0
+# Every manifest records which harness rules produced it (results are never re-run under new rules, only
+# re-evaluated by bench/report.py from their stored data).
+HARNESS_REVISION = "after the 3.3.f harness change"
 
 
 # --- environment (host side) -----------------------------------------------------------
@@ -294,7 +301,8 @@ class Run:  # pragma: no cover - orchestration on the host, exercised by the tri
             w = csv.writer(f)
             w.writerow(["wall_ms", *names])
             w.writerows([[round(t), *[row.get(n, "") for n in names]] for t, row in self.cpu.samples])
-        base = {"run_id": self.rid, "mode": self.mode, "trial": self.trial, "sensitivity": self.sensitivity,
+        base = {"run_id": self.rid, "harness_revision": HARNESS_REVISION, "mode": self.mode, "trial": self.trial,
+                "sensitivity": self.sensitivity,
                 "rate_per_s": self.rate, "repetition": self.repetition, "assets": len(self.config.telemetry.assets),
                 "clones_per_asset": self.clones_per_asset, "bridge_log_level": self.log_level,
                 "bridge_producer": dict(self.config.bridge.producer), "started": self.started.isoformat(),
@@ -398,13 +406,22 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
         w.writerows([[round(s.wall_ms), s.scheduled, s.raw_records, s.consumer_lag] for s in samples])
     (r.dir / "counters.json").write_text(json.dumps({**counts, "alarms_in_window": alarms_window}, indent=1) + "\n",
                                          encoding="utf-8")
+    # Clock quality (owner, DETENTE 3.3.f): the meter's samples of wall minus monotonic clock, against the
+    # negative latency samples it saw (their wall time).
+    clock_samples = [tuple(c) for c in meter.get("clock", [])]
+    with open(r.dir / "clock.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["wall_ms", "wall_minus_monotonic_ms"])
+        w.writerows(clock_samples)
+    negatives = meter.get("negatives", [])
+    clock = analysis.clock_quality(clock_samples, [n[0] for n in negatives])
     r.write({"publishable": not trial and verdict.valid, "warmup_s": bench.warmup_s, "measured_s": measured_s,
              "t0_ms": t0_ms, "window": window, "finished": finished.isoformat(),
              "fetch_wait_max_ms": meter.get("fetch_wait_max_ms"),
              "lag_peak_s": max((y for _, y in lag), default=0.0) / rate,
              "lag_slope_s_per_s": criteria.slope([(x, y / rate) for x, y in lag]),
              "valid": verdict.valid, "sustainable": sustainable, "generator_saturated": verdict.generator_saturated,
-             "problems": reported, "thresholds": thresholds.__dict__,
+             "problems": reported, "thresholds": thresholds.__dict__, "clock": clock, "negatives": negatives,
              # Environment, integrity and CPU problems alone, so bench/report.py can re-evaluate D8 with other thresholds.
              "run_problems": all_problems}, histograms)
     r.down()

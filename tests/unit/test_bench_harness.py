@@ -45,6 +45,18 @@ def test_meter_window_and_shares():
     assert Histogram.from_json(r["histograms"]["produce_to_visible"]).max_ms == 8.5
     assert r["series"][0][:2] == [10, 1]
     assert 11_000 in m.window and 13_000 not in m.window
+    assert r["negatives"] == []
+
+
+def test_meter_counts_negative_samples_and_keeps_their_time():
+    """Negative samples (a later event read earlier than its cause, two clocks): counted, never dropped."""
+    m = meter.Meter(meter.Window(t0_ms=0, warmup_s=0, measured_s=10))
+    m.record("a", 0, 1_000, 998, 999.5)  # e2e -0.5, ingest -2, produce_to_visible 1.5
+    m.record("a", 1, 2_000, 2_001, 2_003.0)
+    r = m.result()
+    assert r["negatives"] == [[999.5, "e2e", -0.5], [999.5, "ingest", -2]]
+    assert Histogram.from_json(r["histograms"]["e2e"]).underflow == 1
+    assert Histogram.from_json(r["histograms"]["ingest"]).underflow == 1
 
 
 # --- analysis ----------------------------------------------------------------------------
@@ -96,12 +108,39 @@ def test_integrity_clean_and_each_problem():
     assert [p.split()[0] for p in problems] == ["generator", "Mosquitto", "telemetry.raw", "meter", "2", "alarm", "alarms"]
 
 
-def test_cpu_problems_flags_clients_only():
-    samples = [(0, {"bridge": 50.0, "broker": 150.0}), (1, {"bridge": 95.0, "generator": 10.0})]
+def test_cpu_rule_applies_to_the_instruments_only():
+    """Owner, DETENTE 3.3.f: the bridge and the alarm consumer are the system under test, judged by D8 alone; their
+    CPU is data. Only the generator and the meter above the limit invalidate a run."""
+    samples = [(0, {"bridge": 50.0, "broker": 150.0}), (1, {"bridge": 102.0, "alarm-consumer": 95.0, "generator": 10.0})]
     peaks, problems = analysis.cpu_problems(samples, 0.8)
-    assert peaks == {"bridge": 95.0, "broker": 150.0, "generator": 10.0}
-    assert problems == ["CPU-bound client(s): bridge at 95 % of a core"]
+    assert peaks == {"bridge": 102.0, "broker": 150.0, "alarm-consumer": 95.0, "generator": 10.0}
+    assert problems == []
+    _, problems = analysis.cpu_problems([(0, {"generator": 89.4, "meter": 81.0, "bridge": 99.0})], 0.8)
+    assert problems == ["CPU-bound instrument(s): generator at 89 % of a core, meter at 81 % of a core"]
     assert analysis.cpu_problems([], 0.8) == ({}, [])
+    stored = ["CPU-bound client(s): bridge at 102 % of a core", "not on AC power"]
+    assert analysis.without_system_under_test_cpu(stored) == ["not on AC power"]
+
+
+def test_clock_quality_steps_drift_and_alignment():
+    """Owner, DETENTE 3.3.f: wall minus monotonic, every ~100 ms; a backward step and the negatives after it."""
+    samples = [(0.0, 5.0), (100.0, 5.01), (200.0, 5.0), (300.0, 0.2), (400.0, 0.21), (500.0, 1.5), (600.0, 1.5)]
+    q = analysis.clock_quality(samples, [350.0, 900.0, 5000.0, 250.0])
+    assert q["samples"] == 7 and q["largest_backward_step_ms"] == 4.8 and q["backward_steps"] == 1
+    assert q["forward_steps"] == 1 and q["total_drift_ms"] == -3.5
+    # 350 and 900 fall within 1 s after the step at 300; 5000 is too late; 250 comes before it.
+    assert (q["negative_samples"], q["negatives_after_a_backward_step"]) == (4, 2)
+    assert analysis.clock_quality([], [1.0]) == {"samples": 0, "largest_backward_step_ms": 0.0, "backward_steps": 0,
+                                                 "forward_steps": 0, "total_drift_ms": 0.0, "negative_samples": 1,
+                                                 "negatives_after_a_backward_step": 0, "window_ms": 1000.0}
+
+
+def test_clock_sampler_records_wall_minus_monotonic():
+    wall, mono = iter([1000.0, 1000.1]), iter([10.0, 10.1005])
+    c = meter.ClockSampler(wall=lambda: next(wall), mono=lambda: next(mono))
+    c.sample()
+    c.sample()
+    assert c.samples == [(1_000_000.0, 990_000.0), (1_000_100.0, 989_999.5)]
 
 
 def test_run_input_and_plan():
@@ -176,6 +215,7 @@ def write_run(root: Path, name: str, mode: str, rate: float, latency: float, tri
         late.add(0.4)
     window = {"start_ms": 0, "end_ms": 10_000}
     (d / "manifest.json").write_text(json.dumps({"mode": mode, "trial": trial, "rate_per_s": rate, "repetition": repetition,
+                                                 "valid": not problems,
                                                  "window": window, "run_problems": problems or [], "sensitivity": sensitivity,
                                                  "bridge_log_level": "WARNING" if sensitivity else "INFO"}),
                                      encoding="utf-8")
@@ -197,10 +237,12 @@ def test_report_renders_runs_ladder_and_recomputes_the_cut(tmp_path):
     runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
     t = criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0)
     text = report.render(runs, t, (250.0, 500.0, 1000.0, 2000.0))
-    assert "| a-trial | trial | 5 | INFO | yes | no |" in text  # a trial is never publishable
+    assert "| a-trial | trial | 5 | INFO | yes | valid yes | no |" in text  # a trial is never publishable
     assert "- 1000/s: not sustainable - p99 not below 1000 ms" in text
     assert "Next: the intermediate step 750/s, between 500 and 1000" in text  # DETENTE 3.3.d
-    assert "Candidate: 500/s; repetitions 1; not yet confirmed (E2)." in text
+    assert "Candidate: 500/s; runs 1 of the 5 E2 needs; not yet confirmed (E2)." in text
+    assert "| 12 / 12 / - (n=200) |" in text  # whole milliseconds, rounded up; n=200 has no p99 (DETENTE 3.3.f)
+    assert "resolution" in text and "is 1 ms" in text and "Minimum and maximum latency are not results" in text
     assert "dominated by linger.ms" in text and "No calibration runs." in text
     looser = report.render(runs, criteria.Thresholds(2000, 1.0, 0.001, 0, 5.0, 100.0))
     assert "Candidate: 1000/s" in looser  # same results, another threshold, no new run
@@ -285,3 +327,57 @@ def test_report_reevaluates_stored_runs_and_needs_both_calibrations(tmp_path):
     assert "| g2000 | generator | 2000 | no | no |" in text and "Generator cap 1000/s" in text
     legacy = {"run_problems": ["host free memory fell to 1.2 GB", "sent 1 of 2, acknowledged 0"]}
     assert report.environment_problems(legacy) == ["host free memory fell to 1.2 GB"]
+
+
+def test_report_reevaluates_the_cpu_rule_and_shows_both_verdicts(tmp_path):
+    """Block 3's 2000 msg/s runs: recorded invalid for the bridge's CPU, valid under DETENTE 3.3.f's rule."""
+    write_run(tmp_path, "a-1000", "throughput", 1000, 20.0)
+    write_run(tmp_path, "b-2000", "throughput", 2000, 40.0, problems=["CPU-bound client(s): bridge at 102 % of a core"])
+    write_run(tmp_path, "c-3000", "throughput", 3000, 40.0)
+    m = json.loads((tmp_path / "b-2000" / "manifest.json").read_text(encoding="utf-8"))
+    m.update({"valid": False, "sustainable": False, "cpu_peak_percent": {"bridge": 102.0, "generator": 61.0}})
+    (tmp_path / "b-2000" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    m = json.loads((tmp_path / "c-3000" / "manifest.json").read_text(encoding="utf-8"))
+    m["cpu_peak_percent"] = {"generator": 85.0}  # an instrument over the limit: still invalid
+    (tmp_path / "c-3000" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    t = criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0)
+    text = report.render(runs, t, (1000.0, 2000.0, 3000.0), 0.8, 5)
+    assert "| b-2000 | throughput | 2000 | INFO | yes | valid no, sustainable no |" in text
+    assert "| c-3000 | throughput | 3000 | INFO | no |" in text and "CPU-bound instrument(s): generator at 85 %" in text
+    assert "- 2000/s: sustainable" in text and "- 3000/s: not sustainable" in text
+    assert report.run_problems({"run_problems": ["CPU-bound instrument(s): meter at 90 % of a core"],
+                                "cpu_peak_percent": {"meter": 90.0}}, 0.8) == ["CPU-bound instrument(s): meter at 90 % of a core"]
+
+
+def test_report_clock_negatives_and_repetitions(tmp_path):
+    for i, latency in enumerate((7.2, 7.6, 8.4)):
+        write_run(tmp_path, f"r{i}", "latency", 50, latency, repetition=i + 1)
+    m = json.loads((tmp_path / "r0" / "manifest.json").read_text(encoding="utf-8"))
+    m["clock"] = analysis.clock_quality([(0.0, 5.0), (100.0, 0.2)], [150.0])
+    (tmp_path / "r0" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    h = Histogram()
+    h.add(-1.0)
+    h.add(3.0)
+    (tmp_path / "r0" / "latency_ingest.json").write_text(json.dumps(h.to_json()), encoding="utf-8")
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (), 0.8, 5)
+    assert ("| 0 / 1 / - / - / - | 4.8 ms back (1 steps), drift -4.8 ms; 1 of 1 negatives within 1 s after a "
+            "backward step |") in text
+    assert "| 0 / - / - / - / - | not sampled |" in text  # runs before DETENTE 3.3.f
+    # Median and range across the three repetitions, whole milliseconds rounded up: 7.2, 7.6, 8.4 -> 8 (8-9).
+    assert "| latency | 50 | INFO | 3 | F1 e2e | 8 (8-9) | 8 (8-9) | - | 200 |" in text  # n=200: no p99
+    assert report.spread([1.0, None]) == "-" and report.ms(None) == "-" and report.ms(7.0) == "7"
+
+
+def test_report_ladder_complete_up_to_the_cap_and_e2_needs_its_runs(tmp_path):
+    write_calibration(tmp_path, "c1", "calibrate-generator", 1000)
+    write_calibration(tmp_path, "c2", "calibrate-meter", 600000, cpu=60.0, records_per_s=9000.0)
+    for i in range(5):
+        write_run(tmp_path, f"t{i}", "throughput", 1000, 20.0, repetition=i + 1)
+    write_run(tmp_path, "u", "throughput", 500, 20.0)
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (500.0, 1000.0, 2000.0), 0.8, 5)
+    assert "Every step up to the cap is sustainable: the result is at least 1000/s" in text
+    assert "Candidate: 1000/s; runs 5 of the 5 E2 needs; confirmed." in text
+

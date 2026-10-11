@@ -37,6 +37,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -85,6 +86,33 @@ class Window:
         return self.start_ms <= ts_ms < self.end_ms
 
 
+# Clock quality (owner, DETENTE 3.3.f): how often the meter samples the wall clock against the monotonic clock.
+CLOCK_INTERVAL_S = 0.1
+# At most this many negative latency samples keep their time stamp; all are counted (the histograms' underflow).
+NEGATIVES_KEPT = 10000
+
+
+class ClockSampler:
+    """Wall clock minus monotonic clock, in ms, with the wall time of each sample (owner, DETENTE 3.3.f).
+
+    Every container of the stack reads the same VM clock; a backward step here is a backward step for the bridge's
+    and the generator's time stamps too, which is how a later event can read earlier than its cause.
+    """
+
+    def __init__(self, wall=time.time, mono=time.monotonic):
+        self.wall, self.mono = wall, mono
+        self.samples: list[tuple[float, float]] = []
+
+    def sample(self) -> None:
+        w, m = self.wall(), self.mono()
+        self.samples.append((round(w * 1000, 3), round((w - m) * 1000, 3)))
+
+    def run(self, stop: threading.Event, interval_s: float = CLOCK_INTERVAL_S) -> None:  # pragma: no cover - a thread
+        while not stop.is_set():
+            self.sample()
+            stop.wait(interval_s)
+
+
 class Meter:
     def __init__(self, window: Window):
         self.window = window
@@ -93,6 +121,11 @@ class Meter:
         self.records = 0
         self.in_window = 0
         self.series: dict[int, list] = {}  # visible second -> [records, worst e2e ms]
+        self.negatives: list[tuple[float, str, float]] = []  # (visible ms, figure, value ms), counted, never dropped
+
+    def _negative(self, visible_ms: float, figure: str, value: float) -> None:
+        if value < 0 and len(self.negatives) < NEGATIVES_KEPT:
+            self.negatives.append((round(visible_ms, 3), figure, round(value, 3)))
 
     def record(self, asset: str, seq: int, ts_ms: int, create_ms: int | None, visible_ms: float) -> None:
         self.records += 1
@@ -105,9 +138,12 @@ class Meter:
         if ts_ms in self.window:
             self.in_window += 1
             self.e2e.add(e2e)
+            self._negative(visible_ms, "e2e", e2e)
             if create_ms is not None:
                 self.ingest.add(create_ms - ts_ms)
                 self.produce_to_visible.add(visible_ms - create_ms)
+                self._negative(visible_ms, "ingest", create_ms - ts_ms)
+                self._negative(visible_ms, "produce_to_visible", visible_ms - create_ms)
 
     def result(self) -> dict:
         return {
@@ -120,6 +156,7 @@ class Meter:
             "summaries": {"e2e": self.e2e.summary(), "ingest": self.ingest.summary(),
                           "produce_to_visible": self.produce_to_visible.summary()},
             "series": [[s, c, round(w, 3)] for s, (c, w) in sorted(self.series.items())],
+            "negatives": [list(n) for n in self.negatives],
         }
 
 
@@ -148,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - runs in a 
     topic = config.topics.telemetry_raw.name
     stop = {"now": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.update(now=True))
+    clock, clock_stop = ClockSampler(), threading.Event()
+    threading.Thread(target=clock.run, args=(clock_stop,), daemon=True).start()
 
     consumer = Consumer({"bootstrap.servers": args.kafka_bootstrap, "group.id": f"bench-meter-{os.getpid()}-{time.time_ns()}",
                          "enable.auto.commit": False, "fetch.wait.max.ms": bench.meter_fetch_wait_max_ms,
@@ -181,7 +220,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - runs in a 
         first_s = visible_ms / 1000 if first_s is None else first_s
         last_s = visible_ms / 1000
     consumer.close()
-    result = {**meter.result(), "consumer_errors": errors, "fetch_wait_max_ms": bench.meter_fetch_wait_max_ms}
+    clock_stop.set()
+    result = {**meter.result(), "consumer_errors": errors, "fetch_wait_max_ms": bench.meter_fetch_wait_max_ms,
+              "clock": [list(c) for c in clock.samples]}
     if args.expect:
         elapsed = (last_s - first_s) if first_s is not None and last_s > first_s else None
         result["calibration"] = {"expected": args.expect, "read": meter.records, "elapsed_s": elapsed,

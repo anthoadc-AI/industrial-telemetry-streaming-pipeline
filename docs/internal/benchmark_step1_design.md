@@ -340,3 +340,42 @@ Registradas en `docs/internal/phase3_backlog.md`, sección del informe de cierre
 - las funciones de E/S del arnés llevan `pragma: no cover`, así que la cifra de cobertura no las incluye;
 - la tolerancia de la pendiente del lag es de 0,001 s/s.
 
+
+## Decisiones del DETENTE 3.3.e y del DETENTE 3.3.f (cambios del arnés durante el STEP 2)
+
+Las corridas hechas antes de cada cambio no se repiten: el informe las reevalúa desde sus datos guardados y muestra junto a cada una el veredicto que su manifiesto registró al correr. Cada manifiesto nuevo lleva `harness_revision`.
+
+### DETENTE 3.3.e: un solo criterio para la calibración y la escalera
+
+- La calibración del generador aplica la misma regla de CPU que una corrida del pipeline. Un acuse pendiente al saturarse es "no sostenido", no "inválido": una corrida solo es inválida por fallos de entorno o de integridad.
+- El tope del medidor es su tasa dentro de la misma fracción de un núcleo. La calibración lo hace leer a un núcleo completo, así que el tope está escalado, suponiendo su CPU proporcional a la tasa: es una hipótesis, no una medida.
+- El informe solo pone tope a la escalera cuando el generador y el medidor están calibrados.
+
+### DETENTE 3.3.f: la regla de CPU solo para los instrumentos (regla cambiada tras ver el bloque 3)
+
+- **Antes:** `max_client_core_fraction` se aplicaba a todo "cliente": bridge, alarm consumer, generador y medidor. Un cliente por encima del límite invalidaba la corrida.
+- **Ahora:** se aplica solo a los instrumentos de medida, generador y medidor. El sistema bajo prueba (bridge y alarm consumer) se juzga solo por D8: p99 por debajo de 1 s, lag acotado y cero pérdidas. Su CPU se registra y se informa como dato, no como condición de validez.
+- **Por qué:** aplicada al sistema bajo prueba, la regla descarta justamente las corridas que muestran su límite. En el bloque 3, las dos corridas a 2000 msg/s quedaron inválidas con "bridge al 102 % de un núcleo", aunque cumplían D8 (p99 de 41 y 48 ms, lag máximo de 0,11 y 0,13 s, sin pérdidas).
+- **Cuándo se decidió:** el cambio se decidió después de ver esos resultados, y así se declara. Las dos corridas se reevalúan desde sus datos, sin repetirlas, y el informe muestra los dos veredictos.
+
+### DETENTE 3.3.f: calidad del reloj
+
+- **Qué se observó:** en los bloques 2 y 3 aparecieron muestras de latencia negativas: `ingest` hasta −5 ms y e2e hasta −2,7 ms. El propio log del bridge mostró mensajes recibidos hasta 4,8 ms antes de su instante programado, y el generador nunca envió antes de tiempo.
+- **Hipótesis a probar:** ajustes del reloj de la VM de Docker (la sincronización horaria de WSL2).
+- **Qué mide ahora el medidor:** muestrea dentro de su contenedor el reloj de pared menos el monotónico, cada 100 ms (`bench/meter.py`, `ClockSampler`). También guarda el instante de cada muestra negativa.
+- **Qué guarda el arnés:**
+  - la serie, en `clock.csv`;
+  - en el manifiesto:
+    - el mayor salto hacia atrás;
+    - el número de saltos;
+    - la deriva total;
+    - cuántas muestras negativas caen dentro del segundo posterior a un salto hacia atrás (`analysis.clock_quality`).
+- **Muestras negativas:** se cuentan y nunca se descartan.
+
+### DETENTE 3.3.f: el informe
+
+- **Mediana y rango:** calcula él mismo la mediana y el rango entre repeticiones (ninguna cifra leída a mano).
+- **Resolución:** declara la resolución de 1 ms de las cifras de latencia. Las presenta en milisegundos enteros, cada percentil redondeado hacia arriba desde el borde superior de su cubeta, para que nunca subestime.
+- **Mínimo y máximo:** no se presentan como resultados.
+- **E2:** se confirma solo con `throughput.repetitions_at_candidate` corridas, todas válidas y sostenibles. Antes bastaban dos, y la repetición de una corrida inválida contaba como una de ellas.
+- **Escalera:** una escalera incompleta lo dice, con su siguiente escalón. Una escalera sostenible hasta el tope se informa como "al menos el tope, limitada por las herramientas de medida".

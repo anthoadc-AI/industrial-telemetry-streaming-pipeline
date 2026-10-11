@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
+import statistics
 import sys
 from pathlib import Path
 
@@ -42,6 +44,12 @@ DEFINITIONS = """## What the figures contain
 - **F2 alarm**: the triggering sample's ts to the alarm consumer's acknowledgement of the alarm event.
 - **F4 produce-to-ack**: the bridge's produce() call to the broker's acknowledgement reaching it (bridge at INFO).
 - **Generator late**: the generator's own lateness, actual send minus scheduled instant.
+
+**Resolution.** The latency figures compare whole-millisecond time stamps (ts, CreateTime), so their resolution
+is 1 ms: they are given in whole milliseconds, each percentile rounded up from the upper edge of its histogram
+bucket, so it never understates. Minimum and maximum latency are not results and are not given. Negative samples
+(a later event reading earlier than its cause, from two clocks) are counted, never dropped. The generator's
+lateness is measured within one process, to 0.1 ms.
 """
 
 
@@ -59,11 +67,21 @@ def load_run(run_dir: Path) -> dict:
     return {"dir": run_dir.name, "manifest": manifest, "hists": hists, "samples": samples, "counters": counters}
 
 
-def run_input(run: dict) -> criteria.RunInput:
+def run_problems(m: dict, max_core_fraction: float) -> list[str]:
+    """A pipeline run's problems under the current CPU rule (DETENTE 3.3.f): the stored ones without the old flag on
+    the system under test, and the instruments' CPU re-checked from the stored peaks."""
+    problems = analysis.without_system_under_test_cpu(list(m.get("run_problems", [])))
+    if not any(p.startswith("CPU-bound instrument(s)") for p in problems):
+        problems += analysis.cpu_problems([(0, m.get("cpu_peak_percent") or {})], max_core_fraction)[1]
+    return problems
+
+
+def run_input(run: dict, max_core_fraction: float = 0.8) -> criteria.RunInput:
     m = run["manifest"]
     lag = analysis.lag_series(run["samples"], m["window"]["start_ms"], m["window"]["end_ms"])
     return criteria.RunInput(m["rate_per_s"], run["hists"]["e2e"], run["hists"]["generator_late"], lag,
-                             run["counters"]["sent"], run["counters"]["meter_distinct"], list(m.get("run_problems", [])))
+                             run["counters"]["sent"], run["counters"]["meter_distinct"],
+                             run_problems(m, max_core_fraction))
 
 
 def fmt(value) -> str:
@@ -72,11 +90,66 @@ def fmt(value) -> str:
     return f"{value:.1f}" if isinstance(value, float) else str(value)
 
 
+def ms(value: float | None) -> str:
+    """A latency percentile in whole milliseconds, rounded up (see the resolution note)."""
+    return "-" if value is None else str(math.ceil(round(value, 6)))
+
+
 def triple(h: Histogram | None) -> str:
+    """p50 / p95 / p99 of a latency figure, whole milliseconds."""
+    if h is None or h.total == 0:
+        return "-"
+    s = h.summary()
+    return f"{ms(s['p50'])} / {ms(s['p95'])} / {ms(s['p99'])} (n={s['n']})"
+
+
+def late_triple(h: Histogram | None) -> str:
+    """p50 / p95 / p99 of the generator's lateness, to 0.1 ms (measured within one process)."""
     if h is None or h.total == 0:
         return "-"
     s = h.summary()
     return f"{fmt(s['p50'])} / {fmt(s['p95'])} / {fmt(s['p99'])} (n={s['n']})"
+
+
+FIGURES = (("e2e", "F1 e2e"), ("ingest", "ingest"), ("produce_to_visible", "produce_to_visible"),
+           ("alarm_e2e", "F2 alarm"), ("produce_to_ack", "F4 produce-to-ack"))
+
+
+def negatives(run: dict) -> str:
+    """Negative samples per figure (the histograms' underflow), e2e / ingest / produce_to_visible / F2 / F4."""
+    return " / ".join(str(run["hists"][k].underflow) if k in run["hists"] else "-" for k, _ in FIGURES)
+
+
+def clock(m: dict) -> str:
+    c = m.get("clock")
+    if not c:
+        return "not sampled"
+    return (f"{c['largest_backward_step_ms']:g} ms back ({c['backward_steps']} steps), drift {c['total_drift_ms']:g} ms; "
+            f"{c['negatives_after_a_backward_step']} of {c['negative_samples']} negatives within "
+            f"{c['window_ms'] / 1000:g} s after a backward step")
+
+
+def spread(values: list[float]) -> str:
+    """Median (range) across repetitions, whole milliseconds; '-' unless every repetition has the value."""
+    if not values or any(v is None for v in values):
+        return "-"
+    return f"{ms(statistics.median(values))} ({ms(min(values))}-{ms(max(values))})"
+
+
+def repetitions(groups: dict[tuple, list[dict]]) -> list[str]:
+    """Per group of repetitions: each figure's p50, p95 and p99 as median (range) across them, and n per run."""
+    lines = ["| Mode | Rate/s | Bridge log | Runs | Figure | p50 | p95 | p99 | n per run |",
+             "|---|---|---|---|---|---|---|---|---|"]
+    for (mode, rate, level), runs in sorted(groups.items(), key=lambda g: (g[0][0], g[0][1], g[0][2])):
+        for key, name in FIGURES:
+            sums = [r["hists"][key].summary() for r in runs if key in r["hists"] and r["hists"][key].total]
+            if len(sums) != len(runs):
+                continue
+            ns = sorted({x["n"] for x in sums})
+            lines.append(f"| {mode} | {rate:g} | {level} | {len(runs)} | {name} | "
+                         + " | ".join(spread([x[q] for x in sums]) for q in ("p50", "p95", "p99"))
+                         + f" | {ns[0]}" + (f"-{ns[-1]}" if len(ns) > 1 else "") + " |")
+    return lines
 
 
 def environment_problems(m: dict) -> list[str]:
@@ -134,7 +207,7 @@ def calibration(runs: list[dict], bench_fraction: float, t: criteria.Thresholds)
 
 
 def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, ...] = (),
-           max_core_fraction: float = 0.8) -> str:
+           max_core_fraction: float = 0.8, repetitions_at_candidate: int = 5) -> str:
     lines = ["# Benchmark figures (generated by bench/report.py; do not edit)", "",
              f"Thresholds (D8): p99 < {t.p99_ms:g} ms, lag <= {t.max_lag_s:g} s, slope <= {t.max_lag_slope_per_s:g} s/s, "
              f"lost <= {t.max_lost}; generator lateness p99 <= {t.max_late_p99_ms:g} ms, max <= {t.max_late_max_ms:g} ms.", "",
@@ -150,20 +223,36 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
 
     pipeline = [r for r in runs if r["manifest"]["mode"] in ("latency", "throughput")]
     lines += ["", "## Runs", "",
-              "| Run | Mode | Rate/s | Bridge log | Valid | Publishable | F1 e2e p50/p95/p99 ms | ingest | produce_to_visible | "
-              "F2 alarm | F4 produce-to-ack | Generator late | Problems |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "Valid and sustainable are re-evaluated from each run's stored data under the current rules (DETENTE "
+              "3.3.f: the CPU limit applies to the instruments only); \"Recorded\" is what its manifest wrote when it ran.",
+              "",
+              "| Run | Mode | Rate/s | Bridge log | Valid | Recorded | Publishable | F1 e2e p50/p95/p99 ms | ingest | "
+              "produce_to_visible | F2 alarm | F4 produce-to-ack | Generator late | Negatives e2e/ingest/ptv/F2/F4 | Clock | "
+              "Problems |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for run in pipeline:
         m, h = run["manifest"], run["hists"]
-        v = criteria.evaluate(run_input(run), t)
+        v = criteria.evaluate(run_input(run, max_core_fraction), t)
+        recorded = f"valid {'yes' if m.get('valid') else 'no'}" + (
+            f", sustainable {'yes' if m.get('sustainable') else 'no'}" if m.get("sustainable") is not None else "")
         publishable = (not m["trial"]) and v.valid
         # D8 reasons belong to throughput runs only (see bench/harness.py); others show validity problems alone.
         shown = v.reasons if (m["mode"] == "throughput" and not m["trial"]) or not v.valid else []
         kind = "trial" if m["trial"] else m["mode"] + (" (sensitivity)" if m.get("sensitivity") else "")
         lines.append(f"| {run['dir']} | {kind} | {m['rate_per_s']:g} | {m.get('bridge_log_level', '-')} | "
-                     f"{'yes' if v.valid else 'no'} | {'yes' if publishable else 'no'} | {triple(h.get('e2e'))} | "
+                     f"{'yes' if v.valid else 'no'} | {recorded} | {'yes' if publishable else 'no'} | {triple(h.get('e2e'))} | "
                      f"{triple(h.get('ingest'))} | {triple(h.get('produce_to_visible'))} | {triple(h.get('alarm_e2e'))} | "
-                     f"{triple(h.get('produce_to_ack'))} | {triple(h.get('generator_late'))} | {'; '.join(shown) or '-'} |")
+                     f"{triple(h.get('produce_to_ack'))} | {late_triple(h.get('generator_late'))} | {negatives(run)} | "
+                     f"{clock(m)} | {'; '.join(shown) or '-'} |")
+
+    groups: dict[tuple, list[dict]] = {}
+    for run in pipeline:
+        m = run["manifest"]
+        if not m["trial"] and criteria.evaluate(run_input(run, max_core_fraction), t).valid:
+            groups.setdefault((m["mode"], m["rate_per_s"], m.get("bridge_log_level", "-")), []).append(run)
+    repeated = {k: v for k, v in groups.items() if len(v) > 1}
+    if repeated:
+        lines += ["", "## Repetitions (median and range across valid runs, whole ms)", ""] + repetitions(repeated)
 
     headline = [r for r in pipeline if r["manifest"]["mode"] == "throughput" and not r["manifest"]["trial"]
                 and not r["manifest"].get("sensitivity")]
@@ -174,7 +263,7 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     first = {}
     for r in sorted(headline, key=lambda r: (r["manifest"]["rate_per_s"], r["manifest"]["repetition"])):
         first.setdefault(r["manifest"]["rate_per_s"], r)
-    result = criteria.ladder([run_input(r) for r in first.values()], t)
+    result = criteria.ladder([run_input(r, max_core_fraction) for r in first.values()], t)
     for rate, v in result.steps:
         lines.append(f"- {rate:g}/s: {'sustainable' if v.sustainable else 'not sustainable'}"
                      f"{'' if v.sustainable else ' - ' + '; '.join(v.reasons)}")
@@ -185,10 +274,17 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     if step is not None:
         lines.append(f"\nNext: the intermediate step {step:g}/s, between {result.max_sustainable_rate:g} and "
                      f"{result.first_failure[0]:g}, before the E2 repetitions.")
-    reps = [run_input(r) for r in headline if r["manifest"]["rate_per_s"] == result.max_sustainable_rate]
+    above = [r for r in effective if r > result.max_sustainable_rate]
+    if result.first_failure is None and above:
+        lines.append(f"\nThe ladder is not complete: next step {min(above):g}/s.")
+    elif result.first_failure is None and effective and capped:
+        lines.append(f"\nEvery step up to the cap is sustainable: the result is at least {result.max_sustainable_rate:g}/s, "
+                     "limited by the measuring tools (the calibration's cap), not a ceiling of the pipeline.")
+    reps = [run_input(r, max_core_fraction) for r in headline if r["manifest"]["rate_per_s"] == result.max_sustainable_rate]
     ok, _ = criteria.confirmed(reps, t)
-    lines.append(f"\nCandidate: {result.max_sustainable_rate:g}/s; repetitions {len(reps)}; "
-                 f"{'confirmed' if ok and len(reps) > 1 else 'not yet confirmed (E2)'}.")
+    # E2 (amendment E2, config throughput.repetitions_at_candidate): that many runs, every one valid and sustainable.
+    lines.append(f"\nCandidate: {result.max_sustainable_rate:g}/s; runs {len(reps)} of the {repetitions_at_candidate} E2 "
+                 f"needs; {'confirmed' if ok and len(reps) >= repetitions_at_candidate else 'not yet confirmed (E2)'}.")
     if result.limited_by_generator:
         lines.append("Limited by the generator: the step above the candidate failed because the generator saturated.")
 
@@ -204,7 +300,7 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
                 merged = Histogram()
                 for r in group:
                     merged = merged.merge(r["hists"]["e2e"])
-                passed = sum(criteria.evaluate(run_input(r), t).sustainable for r in group)
+                passed = sum(criteria.evaluate(run_input(r, max_core_fraction), t).sustainable for r in group)
                 lines.append(f"| {rate:g} | {group[0]['manifest'].get('bridge_log_level', '-')} | {len(group)} | "
                              f"{passed} of {len(group)} | {triple(merged)} |")
     return "\n".join(lines) + "\n"
@@ -222,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin comma
     runs = [load_run(d) for d in sorted(args.results.iterdir()) if (d / "manifest.json").is_file()]
     t = criteria.Thresholds(args.p99_ms, args.max_lag_s, args.max_lag_slope, args.max_lost,
                             bench.max_late_p99_ms, bench.max_late_max_ms)
-    sys.stdout.write(render(runs, t, bench.ladder_per_s, bench.max_client_core_fraction))
+    sys.stdout.write(render(runs, t, bench.ladder_per_s, bench.max_client_core_fraction, bench.repetitions_at_candidate))
     return 0
 
 
