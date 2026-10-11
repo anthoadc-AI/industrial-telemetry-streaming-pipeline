@@ -64,7 +64,12 @@ def load_run(run_dir: Path) -> dict:
                        for r in csv.DictReader(f)]
     counters_path = run_dir / "counters.json"
     counters = json.loads(counters_path.read_text(encoding="utf-8")) if counters_path.is_file() else {}
-    return {"dir": run_dir.name, "manifest": manifest, "hists": hists, "samples": samples, "counters": counters}
+    clock_samples = None
+    if (run_dir / "clock.csv").is_file():
+        with open(run_dir / "clock.csv", encoding="utf-8") as f:
+            clock_samples = [(float(r["wall_ms"]), float(r["wall_minus_monotonic_ms"])) for r in csv.DictReader(f)]
+    return {"dir": run_dir.name, "manifest": manifest, "hists": hists, "samples": samples, "counters": counters,
+            "clock": clock_samples}
 
 
 def run_problems(m: dict, max_core_fraction: float) -> list[str]:
@@ -120,13 +125,16 @@ def negatives(run: dict) -> str:
     return " / ".join(str(run["hists"][k].underflow) if k in run["hists"] else "-" for k, _ in FIGURES)
 
 
-def clock(m: dict) -> str:
-    c = m.get("clock")
-    if not c:
+def clock(run: dict) -> str:
+    """Clock quality, recomputed from the stored clock.csv and negatives with the current window (the manifests of
+    df684f6's runs hold a version computed with a window that missed every negative)."""
+    m = run["manifest"]
+    if run.get("clock") is None:
         return "not sampled"
+    c = analysis.clock_quality(run["clock"], [n[0] for n in m.get("negatives", [])])
     return (f"{c['largest_backward_step_ms']:g} ms back ({c['backward_steps']} steps), drift {c['total_drift_ms']:g} ms; "
-            f"{c['negatives_after_a_backward_step']} of {c['negative_samples']} negatives within "
-            f"{c['window_ms'] / 1000:g} s after a backward step")
+            f"{c['negatives_after_a_backward_step']} of {c['negative_samples']} negatives at a backward step "
+            f"(by chance {c['expected_by_chance']:g})")
 
 
 def spread(values: list[float]) -> str:
@@ -243,7 +251,7 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
                      f"{'yes' if v.valid else 'no'} | {recorded} | {'yes' if publishable else 'no'} | {triple(h.get('e2e'))} | "
                      f"{triple(h.get('ingest'))} | {triple(h.get('produce_to_visible'))} | {triple(h.get('alarm_e2e'))} | "
                      f"{triple(h.get('produce_to_ack'))} | {late_triple(h.get('generator_late'))} | {negatives(run)} | "
-                     f"{clock(m)} | {'; '.join(shown) or '-'} |")
+                     f"{clock(run)} | {'; '.join(shown) or '-'} |")
 
     groups: dict[tuple, list[dict]] = {}
     for run in pipeline:
@@ -280,13 +288,19 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     elif result.first_failure is None and effective and capped:
         lines.append(f"\nEvery step up to the cap is sustainable: the result is at least {result.max_sustainable_rate:g}/s, "
                      "limited by the measuring tools (the calibration's cap), not a ceiling of the pipeline.")
-    reps = [run_input(r, max_core_fraction) for r in headline if r["manifest"]["rate_per_s"] == result.max_sustainable_rate]
+    # E2 counts the runs of one harness revision, the latest at that step: runs made before a harness change are
+    # labelled and not mixed with those made after it (briefing, STEP 2).
+    at_candidate = [r for r in headline if r["manifest"]["rate_per_s"] == result.max_sustainable_rate]
+    latest = max((r["manifest"].get("harness_revision") or "" for r in at_candidate), default="")
+    reps = [run_input(r, max_core_fraction) for r in at_candidate if (r["manifest"].get("harness_revision") or "") == latest]
     ok, _ = criteria.confirmed(reps, t)
     # E2 (amendment E2, config throughput.repetitions_at_candidate): that many runs, every one valid and sustainable.
     lines.append(f"\nCandidate: {result.max_sustainable_rate:g}/s; runs {len(reps)} of the {repetitions_at_candidate} E2 "
                  f"needs; {'confirmed' if ok and len(reps) >= repetitions_at_candidate else 'not yet confirmed (E2)'}.")
     if result.limited_by_generator:
-        lines.append("Limited by the generator: the step above the candidate failed because the generator saturated.")
+        lines.append(f"Limited by the measuring tools: the step above the candidate, {result.first_failure[0]:g}/s, could "
+                     "not be measured validly (an instrument at its limit); the ladder ends there, with no intermediate "
+                     "step.")
 
     sensitivity = [r for r in pipeline if r["manifest"].get("sensitivity")]
     if sensitivity:

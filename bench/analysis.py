@@ -133,21 +133,29 @@ def without_system_under_test_cpu(problems: list[str]) -> list[str]:
 
 
 def clock_quality(samples: list[tuple[float, float]], negatives: list[float],
-                  window_ms: float = 1000.0) -> dict:
+                  window_ms: float = 100.0) -> dict:
     """Wall clock minus monotonic clock, as (wall ms, offset ms) every ~100 ms, against the negative latency samples
     (their wall ms). A backward step is a fall of the offset by at least CLOCK_STEP_MIN_MS between two samples: the
-    wall clock was set back, so a later timestamp can read earlier than one taken before it on another container
-    of the same VM. Negative samples are counted, never dropped; "after a backward step" means within window_ms
-    after one."""
-    deltas = [(t, off - prev) for (_, prev), (t, off) in zip(samples, samples[1:])]
-    backward = [(t, -d) for t, d in deltas if d <= -CLOCK_STEP_MIN_MS]
-    forward = [(t, d) for t, d in deltas if d >= CLOCK_STEP_MIN_MS]
-    aligned = sum(1 for n in negatives if any(0 <= n - t <= window_ms for t, _ in backward))
+    wall clock was set back somewhere between them, so a later timestamp can read earlier than one taken before it
+    on another container of the same VM. Negative samples are counted, never dropped.
+
+    A negative sample lines up with a step when it falls from the sample before the step to window_ms after the
+    sample that shows it (the step happened somewhere in between; owner, after DETENTE 3.3.f: counting only after
+    the detecting sample missed every negative). "expected_by_chance" is how many would fall in those windows if
+    the negatives were spread evenly over the sampled time.
+    """
+    pairs = list(zip(samples, samples[1:]))
+    backward = [(a[0], b[0], a[1] - b[1]) for a, b in pairs if b[1] - a[1] <= -CLOCK_STEP_MIN_MS]
+    forward = [b[0] for a, b in pairs if b[1] - a[1] >= CLOCK_STEP_MIN_MS]
+    aligned = sum(1 for n in negatives if any(before <= n <= after + window_ms for before, after, _ in backward))
+    span = samples[-1][0] - samples[0][0] if len(samples) > 1 else 0.0
+    covered = sum(min(after + window_ms, samples[-1][0]) - before for before, after, _ in backward)
     return {"samples": len(samples),
-            "largest_backward_step_ms": round(max((s for _, s in backward), default=0.0), 3),
+            "largest_backward_step_ms": round(max((s for *_, s in backward), default=0.0), 3),
             "backward_steps": len(backward), "forward_steps": len(forward),
             "total_drift_ms": round(samples[-1][1] - samples[0][1], 3) if len(samples) > 1 else 0.0,
             "negative_samples": len(negatives), "negatives_after_a_backward_step": aligned,
+            "expected_by_chance": round(len(negatives) * covered / span, 2) if span else 0.0,
             "window_ms": window_ms}
 
 

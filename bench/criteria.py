@@ -108,14 +108,17 @@ def ladder(runs: list[RunInput], t: Thresholds) -> LadderResult:
     """Walk the steps upward (one run each) and stop at the first that is not sustainable.
 
     The result is the highest sustainable step below that failure: the candidate for the repetitions (E2).
-    If the failing step's generator saturated, the ladder is reported as limited by the generator.
+    If the failing step was not measured validly because an instrument was at its limit (the generator saturated,
+    or a CPU-bound instrument), the ladder is limited by the measuring tools: it ends there, with no intermediate
+    step (owner, after DETENTE 3.3.f: F3 closed at 2000 msg/s, the generator unable to drive 3000 validly).
     """
     steps, best = [], None
     for run in sorted(runs, key=lambda r: r.rate_per_s):
         v = evaluate(run, t)
         steps.append((run.rate_per_s, v))
         if not v.sustainable:
-            return LadderResult(best, v.generator_saturated, (run.rate_per_s, v.reasons), steps)
+            by_tools = v.generator_saturated or any(r.startswith("CPU-bound instrument(s)") for r in v.reasons)
+            return LadderResult(best, by_tools, (run.rate_per_s, v.reasons), steps)
         best = run.rate_per_s
     return LadderResult(best, False, None, steps)
 
@@ -134,7 +137,7 @@ def intermediate_step(last_pass: float, first_fail: float) -> float:
 
 def intermediate_needed(result: LadderResult, ladder_per_s: tuple[float, ...]) -> float | None:
     """The intermediate step still to run: the ladder stopped between two consecutive configured steps."""
-    if result.max_sustainable_rate is None or result.first_failure is None:
+    if result.max_sustainable_rate is None or result.first_failure is None or result.limited_by_generator:
         return None
     best, failed = result.max_sustainable_rate, result.first_failure[0]
     steps = sorted(ladder_per_s)

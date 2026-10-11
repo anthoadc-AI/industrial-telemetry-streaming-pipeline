@@ -379,3 +379,15 @@ Las corridas hechas antes de cada cambio no se repiten: el informe las reevalúa
 - **Mínimo y máximo:** no se presentan como resultados.
 - **E2:** se confirma solo con `throughput.repetitions_at_candidate` corridas, todas válidas y sostenibles. Antes bastaban dos, y la repetición de una corrida inválida contaba como una de ellas.
 - **Escalera:** una escalera incompleta lo dice, con su siguiente escalón. Una escalera sostenible hasta el tope se informa como "al menos el tope, limitada por las herramientas de medida".
+
+### Tras el segundo DETENTE 3.3.f: F3 cerrado en 2000, ventana del reloj y E2 por revisión
+
+- **F3 se cierra en 2000 msg/s (decisión de Anthony).**
+  - El escalón de 3000 msg/s fue inválido dos veces: el generador estaba al 98 % y al 97 % de un núcleo, frente al 71 % en su propia calibración a 3000.
+  - Además se perdieron mensajes entre Mosquitto y el bridge, saturado a 1,01 núcleos.
+  - Cuando el primer escalón que falla es una corrida inválida porque un instrumento llegó a su límite, la escalera termina ahí, "limitada por las herramientas de medida", sin escalón intermedio (`criteria.ladder`, `criteria.intermediate_needed`).
+- **Ventana del reloj.**
+  - Un salto hacia atrás se detecta en la primera muestra posterior, hasta 100 ms después.
+  - La ventana empieza ahora en la muestra anterior al salto y llega a 100 ms después de la que lo detecta. El informe da también cuántas muestras negativas caerían ahí por azar.
+  - La versión de `df684f6` empezaba en la muestra que detecta el salto y no contaba ninguna. El informe recalcula la alineación desde `clock.csv` y las muestras negativas guardadas, sin repetir corridas.
+- **E2.** Las repeticiones del candidato se cuentan solo entre corridas de la misma revisión del arnés, la más reciente en ese escalón. Las de antes de un cambio no se mezclan con las de después (briefing del STEP 2). Las dos corridas de 2000 msg/s anteriores al cambio de 3.3.f no cuentan para E2: son cinco corridas nuevas.

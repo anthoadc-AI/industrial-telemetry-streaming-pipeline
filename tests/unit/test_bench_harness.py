@@ -123,16 +123,19 @@ def test_cpu_rule_applies_to_the_instruments_only():
 
 
 def test_clock_quality_steps_drift_and_alignment():
-    """Owner, DETENTE 3.3.f: wall minus monotonic, every ~100 ms; a backward step and the negatives after it."""
+    """Owner, DETENTE 3.3.f: wall minus monotonic, every ~100 ms; a backward step and the negatives at it."""
     samples = [(0.0, 5.0), (100.0, 5.01), (200.0, 5.0), (300.0, 0.2), (400.0, 0.21), (500.0, 1.5), (600.0, 1.5)]
-    q = analysis.clock_quality(samples, [350.0, 900.0, 5000.0, 250.0])
+    # The step happened between the samples at 200 and 300: 250 (before its detection, the case the first window
+    # missed) and 350 line up; 900 is too late; 150 comes before it.
+    q = analysis.clock_quality(samples, [350.0, 900.0, 250.0, 150.0])
     assert q["samples"] == 7 and q["largest_backward_step_ms"] == 4.8 and q["backward_steps"] == 1
     assert q["forward_steps"] == 1 and q["total_drift_ms"] == -3.5
-    # 350 and 900 fall within 1 s after the step at 300; 5000 is too late; 250 comes before it.
     assert (q["negative_samples"], q["negatives_after_a_backward_step"]) == (4, 2)
+    assert q["expected_by_chance"] == round(4 * 200 / 600, 2)  # the window [200, 400] of a 600 ms span
     assert analysis.clock_quality([], [1.0]) == {"samples": 0, "largest_backward_step_ms": 0.0, "backward_steps": 0,
                                                  "forward_steps": 0, "total_drift_ms": 0.0, "negative_samples": 1,
-                                                 "negatives_after_a_backward_step": 0, "window_ms": 1000.0}
+                                                 "negatives_after_a_backward_step": 0, "expected_by_chance": 0.0,
+                                                 "window_ms": 100.0}
 
 
 def test_clock_sampler_records_wall_minus_monotonic():
@@ -261,7 +264,7 @@ def test_report_no_sustainable_step_and_generator_limit(tmp_path):
     (tmp_path / "b-500" / "latency_generator_late.json").write_text(json.dumps(late.to_json()), encoding="utf-8")
     write_run(tmp_path, "c-100", "throughput", 100, 10.0)
     runs = [report.load_run(tmp_path / n) for n in ("c-100", "b-500")]
-    assert "Limited by the generator" in report.render(runs, t)
+    assert "Limited by the measuring tools: the step above the candidate, 500/s" in report.render(runs, t)
 
 
 def write_calibration(root: Path, name: str, mode: str, rate: float, cpu: float = 50.0, records_per_s=None, acked=None,
@@ -354,16 +357,17 @@ def test_report_clock_negatives_and_repetitions(tmp_path):
     for i, latency in enumerate((7.2, 7.6, 8.4)):
         write_run(tmp_path, f"r{i}", "latency", 50, latency, repetition=i + 1)
     m = json.loads((tmp_path / "r0" / "manifest.json").read_text(encoding="utf-8"))
-    m["clock"] = analysis.clock_quality([(0.0, 5.0), (100.0, 0.2)], [150.0])
+    m["negatives"] = [[150.0, "ingest", -1.0]]
     (tmp_path / "r0" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    (tmp_path / "r0" / "clock.csv").write_text("wall_ms,wall_minus_monotonic_ms\n0,5.0\n100,0.2\n200,0.2\n", encoding="utf-8")
     h = Histogram()
     h.add(-1.0)
     h.add(3.0)
     (tmp_path / "r0" / "latency_ingest.json").write_text(json.dumps(h.to_json()), encoding="utf-8")
     runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
     text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (), 0.8, 5)
-    assert ("| 0 / 1 / - / - / - | 4.8 ms back (1 steps), drift -4.8 ms; 1 of 1 negatives within 1 s after a "
-            "backward step |") in text
+    assert ("| 0 / 1 / - / - / - | 4.8 ms back (1 steps), drift -4.8 ms; 1 of 1 negatives at a backward step "
+            "(by chance 1) |") in text  # recomputed from clock.csv, not read from the manifest
     assert "| 0 / - / - / - / - | not sampled |" in text  # runs before DETENTE 3.3.f
     # Median and range across the three repetitions, whole milliseconds rounded up: 7.2, 7.6, 8.4 -> 8 (8-9).
     assert "| latency | 50 | INFO | 3 | F1 e2e | 8 (8-9) | 8 (8-9) | - | 200 |" in text  # n=200: no p99
@@ -380,4 +384,23 @@ def test_report_ladder_complete_up_to_the_cap_and_e2_needs_its_runs(tmp_path):
     text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (500.0, 1000.0, 2000.0), 0.8, 5)
     assert "Every step up to the cap is sustainable: the result is at least 1000/s" in text
     assert "Candidate: 1000/s; runs 5 of the 5 E2 needs; confirmed." in text
+
+
+def test_ladder_ends_where_an_instrument_was_at_its_limit_and_e2_counts_one_revision(tmp_path):
+    """Owner, after DETENTE 3.3.f: F3 closed at 2000; the 3000 step was invalid, the generator at its limit. E2
+    counts the runs of the latest harness revision only (no mixing across a harness change)."""
+    write_run(tmp_path, "a-1000", "throughput", 1000, 20.0)
+    write_run(tmp_path, "b-2000-old", "throughput", 2000, 40.0)
+    for i in range(5):
+        write_run(tmp_path, f"c-2000-{i}", "throughput", 2000, 40.0, repetition=i + 1)
+        m = json.loads((tmp_path / f"c-2000-{i}" / "manifest.json").read_text(encoding="utf-8"))
+        m["harness_revision"] = "after the 3.3.f harness change"
+        (tmp_path / f"c-2000-{i}" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    write_run(tmp_path, "d-3000", "throughput", 3000, 400.0,
+              problems=["meter saw 1 distinct of 2 sent, 1 gap(s)", "CPU-bound instrument(s): generator at 98 % of a core"])
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 2000.0, 3000.0), 0.8, 5)
+    assert "Limited by the measuring tools: the step above the candidate, 3000/s, could not be measured validly" in text
+    assert "intermediate step 2500" not in text
+    assert "Candidate: 2000/s; runs 5 of the 5 E2 needs; confirmed." in text  # the old run is not one of them
 
