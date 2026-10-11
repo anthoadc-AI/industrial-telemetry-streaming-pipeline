@@ -350,10 +350,11 @@ def thresholds_of(bench: BenchmarkConfig) -> criteria.Thresholds:
 
 
 def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, trial: bool,
-            sensitivity: bool = False, diagnostic: bool = False) -> int:  # pragma: no cover
+            sensitivity: bool = False, diagnostic: bool = False, full_window: bool = False) -> int:  # pragma: no cover
     """One pipeline run (latency, throughput, or the throughput log-level sensitivity), as the module docstring says.
 
-    diagnostic: a throughput run kept short (trial.measured_s) to reproduce a behaviour; never publishable, never on
+    diagnostic: a throughput run kept short (trial.measured_s; run.measured_s with full_window) to reproduce a
+    behaviour; never publishable, never on
     the ladder or in E2 (owner, after the E2 loss at 2000 msg/s)."""
     throughput_run = mode == "throughput" and not trial
     log_level = (bench.bridge_log_level_sensitivity if sensitivity else
@@ -361,7 +362,7 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
     r = Run(bench, mode + ("-diagnostic" if diagnostic else ""), rate, repetition, trial,
             bench.clones_per_asset if throughput_run else 0, log_level, sensitivity)
     r.mode = mode
-    measured_s = bench.trial_measured_s if trial or diagnostic else bench.measured_s
+    measured_s = bench.trial_measured_s if trial or (diagnostic and not full_window) else bench.measured_s
     r.start_stack()
     r.compose("--profile", "pipeline", "up", "-d", "--wait", "--no-deps", "--force-recreate", "bridge", "alarm-consumer")
     wait_for_event(r.override_file, "bridge", "mqtt_subscribed")
@@ -472,7 +473,7 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
              "lag_slope_s_per_s": criteria.slope([(x, y / rate) for x, y in lag]),
              "valid": verdict.valid, "sustainable": sustainable, "generator_saturated": verdict.generator_saturated,
              "problems": reported, "thresholds": thresholds.__dict__, "clock": clock, "negatives": negatives,
-             "diagnostic": diagnostic, "mosquitto": mosquitto,
+             "diagnostic": diagnostic, "diagnostic_full_window": full_window, "mosquitto": mosquitto,
              # Environment, integrity and CPU problems alone, so bench/report.py can re-evaluate D8 with other thresholds.
              "run_problems": all_problems}, histograms)
     r.down()
@@ -570,6 +571,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     r.add_argument("--rate", type=float, help="messages per second (default: the trial rate with --trial)")
     r.add_argument("--repetition", type=int, default=1)
     r.add_argument("--trial", action="store_true", help="the short end-to-end trial; never publishable")
+    r.add_argument("--full-window", action="store_true",
+                   help="with --diagnostic: the normal measured window (run.measured_s) instead of trial.measured_s")
     r.add_argument("--diagnostic", action="store_true",
                    help="throughput, measured for trial.measured_s, to reproduce a behaviour; never publishable")
     r.add_argument("--sensitivity", action="store_true",
@@ -590,11 +593,13 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
             p.error("--sensitivity applies to --mode throughput only")
         if args.diagnostic and (args.mode != "throughput" or args.trial or args.sensitivity):
             p.error("--diagnostic applies to --mode throughput only, without --trial or --sensitivity")
+        if args.full_window and not args.diagnostic:
+            p.error("--full-window applies to --diagnostic only")
         if args.mode == "calibrate-generator":
             runner = lambda: calibrate_generator(bench, rate, args.repetition)  # noqa: E731
         else:
             runner = lambda: execute(bench, args.mode, rate, args.repetition, args.trial, args.sensitivity,  # noqa: E731
-                                     args.diagnostic)
+                                     args.diagnostic, args.full_window)
     try:
         return runner()
     except BaseException:
