@@ -1,0 +1,449 @@
+{
+ "run_id": "20261011T202446Z-throughput-2000-r3",
+ "harness_revision": "after the 3.3.f harness change",
+ "mode": "throughput",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 2000.0,
+ "repetition": 3,
+ "assets": 100,
+ "clones_per_asset": 20,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T20:24:46.898515+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 5.99,
+  "git": {
+   "commit": "3d24ec305b3c66a7d62bcf23209d8f8914d5a664",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 4.33,
+ "cpu_peak_percent": {
+  "generator": 79.73,
+  "meter": 30.48,
+  "bridge": 100.32,
+  "alarm-consumer": 40.42,
+  "schema-registry": 27.19,
+  "broker": 207.65,
+  "mosquitto": 18.3,
+  "zookeeper": 94.03
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "e2e": {
+   "n": 600000,
+   "p50": 5.8,
+   "p95": 16.0,
+   "p99": 38.0,
+   "min": -1.613037109375,
+   "max": 120.555419921875,
+   "underflow": 9
+  },
+  "ingest": {
+   "n": 600000,
+   "p50": 1.1,
+   "p95": 7.1,
+   "p99": 30.0,
+   "min": -5,
+   "max": 107,
+   "underflow": 37
+  },
+  "produce_to_visible": {
+   "n": 600000,
+   "p50": 4.9,
+   "p95": 8.2,
+   "p99": 14.0,
+   "min": -3.9482421875,
+   "max": 63.95361328125,
+   "underflow": 13
+  },
+  "alarm_e2e": {
+   "n": 6000,
+   "p50": 37.0,
+   "p95": 59.0,
+   "p99": null,
+   "min": 6.861,
+   "max": 123.221,
+   "underflow": 0
+  },
+  "generator_late": {
+   "n": 660000,
+   "p50": 0.1,
+   "p95": 0.2,
+   "p99": 0.7,
+   "min": 0.0,
+   "max": 10.296106338500977,
+   "underflow": 0
+  },
+  "produce_to_ack": {
+   "n": 600000,
+   "p50": 4.7,
+   "p95": 11.0,
+   "p99": 25.0,
+   "min": 0.37,
+   "max": 85.419,
+   "underflow": 0
+  }
+ },
+ "publishable": true,
+ "warmup_s": 30.0,
+ "measured_s": 300.0,
+ "t0_ms": 1791750328168,
+ "window": {
+  "start_ms": 1791750358168,
+  "end_ms": 1791750658168
+ },
+ "finished": "2026-10-11T20:31:03.620731+00:00",
+ "fetch_wait_max_ms": 5,
+ "lag_peak_s": 0.131,
+ "lag_slope_s_per_s": -6.685250452686712e-05,
+ "valid": true,
+ "sustainable": true,
+ "generator_saturated": false,
+ "problems": [],
+ "thresholds": {
+  "p99_ms": 1000.0,
+  "max_lag_s": 1.0,
+  "max_lag_slope_per_s": 0.001,
+  "max_lost": 0,
+  "max_late_p99_ms": 5.0,
+  "max_late_max_ms": 100.0
+ },
+ "clock": {
+  "samples": 3411,
+  "largest_backward_step_ms": 6.354,
+  "backward_steps": 11,
+  "forward_steps": 0,
+  "total_drift_ms": -50.141,
+  "negative_samples": 59,
+  "negatives_after_a_backward_step": 59,
+  "expected_by_chance": 0.37,
+  "window_ms": 100.0
+ },
+ "negatives": [
+  [
+   1791750364475.82,
+   "produce_to_visible",
+   -1.18
+  ],
+  [
+   1791750364475.924,
+   "produce_to_visible",
+   -1.076
+  ],
+  [
+   1791750364476.026,
+   "produce_to_visible",
+   -0.974
+  ],
+  [
+   1791750364480.351,
+   "ingest",
+   -3
+  ],
+  [
+   1791750364480.508,
+   "ingest",
+   -4
+  ],
+  [
+   1791750364481.188,
+   "ingest",
+   -3
+  ],
+  [
+   1791750364481.285,
+   "ingest",
+   -3
+  ],
+  [
+   1791750364482.485,
+   "ingest",
+   -3
+  ],
+  [
+   1791750364482.615,
+   "ingest",
+   -3
+  ],
+  [
+   1791750394477.121,
+   "e2e",
+   -0.879
+  ],
+  [
+   1791750394477.121,
+   "produce_to_visible",
+   -0.879
+  ],
+  [
+   1791750394477.845,
+   "produce_to_visible",
+   -0.155
+  ],
+  [
+   1791750394477.959,
+   "e2e",
+   -1.041
+  ],
+  [
+   1791750394477.959,
+   "ingest",
+   -4
+  ],
+  [
+   1791750394482.899,
+   "ingest",
+   -3
+  ],
+  [
+   1791750424480.411,
+   "ingest",
+   -3
+  ],
+  [
+   1791750424480.519,
+   "e2e",
+   -0.481
+  ],
+  [
+   1791750424480.519,
+   "ingest",
+   -4
+  ],
+  [
+   1791750454477.982,
+   "produce_to_visible",
+   -0.018
+  ],
+  [
+   1791750454478.093,
+   "e2e",
+   -0.907
+  ],
+  [
+   1791750454478.093,
+   "produce_to_visible",
+   -0.907
+  ],
+  [
+   1791750454484.221,
+   "ingest",
+   -1
+  ],
+  [
+   1791750454484.42,
+   "ingest",
+   -2
+  ],
+  [
+   1791750454484.496,
+   "ingest",
+   -2
+  ],
+  [
+   1791750454484.756,
+   "ingest",
+   -2
+  ],
+  [
+   1791750454484.826,
+   "ingest",
+   -3
+  ],
+  [
+   1791750484480.192,
+   "ingest",
+   -3
+  ],
+  [
+   1791750484480.293,
+   "e2e",
+   -0.707
+  ],
+  [
+   1791750484480.293,
+   "ingest",
+   -4
+  ],
+  [
+   1791750484480.387,
+   "e2e",
+   -1.613
+  ],
+  [
+   1791750484480.387,
+   "ingest",
+   -5
+  ],
+  [
+   1791750484481.362,
+   "produce_to_visible",
+   -0.638
+  ],
+  [
+   1791750484481.427,
+   "ingest",
+   -4
+  ],
+  [
+   1791750514480.711,
+   "produce_to_visible",
+   -0.289
+  ],
+  [
+   1791750514480.8,
+   "e2e",
+   -0.2
+  ],
+  [
+   1791750514480.8,
+   "ingest",
+   -4
+  ],
+  [
+   1791750514482.435,
+   "ingest",
+   -3
+  ],
+  [
+   1791750544479.911,
+   "produce_to_visible",
+   -0.089
+  ],
+  [
+   1791750544480.052,
+   "produce_to_visible",
+   -3.948
+  ],
+  [
+   1791750544480.586,
+   "produce_to_visible",
+   -3.414
+  ],
+  [
+   1791750544484.804,
+   "produce_to_visible",
+   -0.196
+  ],
+  [
+   1791750544485.12,
+   "ingest",
+   -1
+  ],
+  [
+   1791750544485.311,
+   "ingest",
+   -1
+  ],
+  [
+   1791750544485.494,
+   "ingest",
+   -2
+  ],
+  [
+   1791750544485.63,
+   "ingest",
+   -2
+  ],
+  [
+   1791750544485.767,
+   "e2e",
+   -0.233
+  ],
+  [
+   1791750544485.767,
+   "ingest",
+   -2
+  ],
+  [
+   1791750544486.515,
+   "ingest",
+   -1
+  ],
+  [
+   1791750544486.6,
+   "ingest",
+   -2
+  ],
+  [
+   1791750544486.679,
+   "ingest",
+   -3
+  ],
+  [
+   1791750544486.78,
+   "ingest",
+   -1
+  ],
+  [
+   1791750544487.677,
+   "ingest",
+   -3
+  ],
+  [
+   1791750544487.91,
+   "ingest",
+   -1
+  ],
+  [
+   1791750544488.065,
+   "ingest",
+   -2
+  ],
+  [
+   1791750604492.711,
+   "ingest",
+   -1
+  ],
+  [
+   1791750634488.721,
+   "ingest",
+   -2
+  ],
+  [
+   1791750634488.787,
+   "e2e",
+   -0.213
+  ],
+  [
+   1791750634488.787,
+   "ingest",
+   -3
+  ],
+  [
+   1791750634489.161,
+   "ingest",
+   -2
+  ]
+ ],
+ "run_problems": []
+}
