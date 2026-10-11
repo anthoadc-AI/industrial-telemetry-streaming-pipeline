@@ -243,10 +243,11 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
         v = criteria.evaluate(run_input(run, max_core_fraction), t)
         recorded = f"valid {'yes' if m.get('valid') else 'no'}" + (
             f", sustainable {'yes' if m.get('sustainable') else 'no'}" if m.get("sustainable") is not None else "")
-        publishable = (not m["trial"]) and v.valid
+        publishable = (not m["trial"]) and not m.get("diagnostic") and v.valid
         # D8 reasons belong to throughput runs only (see bench/harness.py); others show validity problems alone.
         shown = v.reasons if (m["mode"] == "throughput" and not m["trial"]) or not v.valid else []
-        kind = "trial" if m["trial"] else m["mode"] + (" (sensitivity)" if m.get("sensitivity") else "")
+        kind = "trial" if m["trial"] else m["mode"] + (" (sensitivity)" if m.get("sensitivity") else "") + (
+            " (diagnostic)" if m.get("diagnostic") else "")
         lines.append(f"| {run['dir']} | {kind} | {m['rate_per_s']:g} | {m.get('bridge_log_level', '-')} | "
                      f"{'yes' if v.valid else 'no'} | {recorded} | {'yes' if publishable else 'no'} | {triple(h.get('e2e'))} | "
                      f"{triple(h.get('ingest'))} | {triple(h.get('produce_to_visible'))} | {triple(h.get('alarm_e2e'))} | "
@@ -256,13 +257,14 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     groups: dict[tuple, list[dict]] = {}
     for run in pipeline:
         m = run["manifest"]
-        if not m["trial"] and criteria.evaluate(run_input(run, max_core_fraction), t).valid:
+        if not m["trial"] and not m.get("diagnostic") and criteria.evaluate(run_input(run, max_core_fraction), t).valid:
             groups.setdefault((m["mode"], m["rate_per_s"], m.get("bridge_log_level", "-")), []).append(run)
     repeated = {k: v for k, v in groups.items() if len(v) > 1}
     if repeated:
         lines += ["", "## Repetitions (median and range across valid runs, whole ms)", ""] + repetitions(repeated)
 
     headline = [r for r in pipeline if r["manifest"]["mode"] == "throughput" and not r["manifest"]["trial"]
+                and not r["manifest"].get("diagnostic")
                 and not r["manifest"].get("sensitivity")]
     lines += ["", "## Throughput ladder (F3, D8; bridge at the product default log level)", ""]
     if not headline:

@@ -176,6 +176,34 @@ def committed(group: str, topic: str, partitions) -> dict[int, int]:  # pragma: 
         c.close()
 
 
+class SysSampler(threading.Thread):  # pragma: no cover - needs Mosquitto
+    """Mosquitto's $SYS counters (analysis.MOSQUITTO_SYS), as it publishes them, until stopped."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        import paho.mqtt.client as mqtt
+        self.samples: list[tuple[float, str, float]] = []
+        self.client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=f"bench-sys-{os.getpid()}")
+        self.client.on_message = self._message
+        self.halt = threading.Event()
+
+    def _message(self, client, userdata, msg):
+        name = analysis.MOSQUITTO_SYS.get(msg.topic)
+        if name:
+            try:
+                self.samples.append((time.time() * 1000, name, float(msg.payload.decode())))
+            except ValueError:
+                pass
+
+    def run(self):
+        self.client.connect("localhost", 1883)
+        self.client.subscribe("$SYS/broker/#", qos=0)
+        self.client.loop_start()
+        self.halt.wait()
+        self.client.loop_stop()
+        self.client.disconnect()
+
+
 class CpuSampler(threading.Thread):  # pragma: no cover - needs Docker
     """docker stats of the project's containers, as fast as it answers (about every 2 s), until stopped."""
 
@@ -322,13 +350,18 @@ def thresholds_of(bench: BenchmarkConfig) -> criteria.Thresholds:
 
 
 def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, trial: bool,
-            sensitivity: bool = False) -> int:  # pragma: no cover
-    """One pipeline run (latency, throughput, or the throughput log-level sensitivity), as the module docstring says."""
+            sensitivity: bool = False, diagnostic: bool = False) -> int:  # pragma: no cover
+    """One pipeline run (latency, throughput, or the throughput log-level sensitivity), as the module docstring says.
+
+    diagnostic: a throughput run kept short (trial.measured_s) to reproduce a behaviour; never publishable, never on
+    the ladder or in E2 (owner, after the E2 loss at 2000 msg/s)."""
     throughput_run = mode == "throughput" and not trial
     log_level = (bench.bridge_log_level_sensitivity if sensitivity else
                  bench.bridge_log_level_throughput if throughput_run else bench.bridge_log_level_latency)
-    r = Run(bench, mode, rate, repetition, trial, bench.clones_per_asset if throughput_run else 0, log_level, sensitivity)
-    measured_s = bench.trial_measured_s if trial else bench.measured_s
+    r = Run(bench, mode + ("-diagnostic" if diagnostic else ""), rate, repetition, trial,
+            bench.clones_per_asset if throughput_run else 0, log_level, sensitivity)
+    r.mode = mode
+    measured_s = bench.trial_measured_s if trial or diagnostic else bench.measured_s
     r.start_stack()
     r.compose("--profile", "pipeline", "up", "-d", "--wait", "--no-deps", "--force-recreate", "bridge", "alarm-consumer")
     wait_for_event(r.override_file, "bridge", "mqtt_subscribed")
@@ -346,6 +379,8 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
 
     plan = schedule.plan_for(rate, tuple(a.id for a in r.config.telemetry.assets), duration, t0_ms)
     r.cpu.start()
+    mosquitto_sys = SysSampler()
+    mosquitto_sys.start()
     samples: list[analysis.LagSample] = []
 
     def sample_once() -> int:
@@ -373,8 +408,13 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
             break
         time.sleep(1)
     r.compose("--profile", "bench", "stop", "meter", check=False, timeout=120)
+    mosquitto_sys.halt.set()
     finished = r.finish_checks()
-    logs = r.save_logs("bridge", "alarm-consumer", "generator", "meter")
+    # Mosquitto, the Kafka broker and ZooKeeper too (owner, after the E2 loss): the broker's own record of a
+    # dropped message, of a segment roll, a rebalance or a controller event.
+    logs = r.save_logs("bridge", "alarm-consumer", "generator", "meter", "mosquitto", "broker", "zookeeper")
+    r.compose("--profile", "full", "cp", "broker:/var/log/kafka/kafkaServer-gc.log", str(r.raw / "broker-gc.log"),
+              check=False)
 
     generator = json.loads((r.out / "generator.json").read_text(encoding="utf-8"))
     meter = json.loads((r.out / "meter.json").read_text(encoding="utf-8"))
@@ -415,13 +455,24 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
         w.writerows(clock_samples)
     negatives = meter.get("negatives", [])
     clock = analysis.clock_quality(clock_samples, [n[0] for n in negatives])
-    r.write({"publishable": not trial and verdict.valid, "warmup_s": bench.warmup_s, "measured_s": measured_s,
+    # Mosquitto's own record (owner, after the E2 loss): its $SYS counters and its drop notices, against what is
+    # missing from telemetry.raw.
+    with open(r.dir / "mosquitto_sys.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["wall_ms", "counter", "value"])
+        w.writerows([(round(t), name, value) for t, name, value in mosquitto_sys.samples])
+    mosquitto = {**analysis.mosquitto_summary(mosquitto_sys.samples),
+                 "drop_notices": analysis.mosquitto_drop_notices(logs["mosquitto"]),
+                 "missing_from_telemetry_raw": generator["sent"] - raw_new}
+    r.write({"publishable": not trial and not diagnostic and verdict.valid, "warmup_s": bench.warmup_s,
+             "measured_s": measured_s,
              "t0_ms": t0_ms, "window": window, "finished": finished.isoformat(),
              "fetch_wait_max_ms": meter.get("fetch_wait_max_ms"),
              "lag_peak_s": max((y for _, y in lag), default=0.0) / rate,
              "lag_slope_s_per_s": criteria.slope([(x, y / rate) for x, y in lag]),
              "valid": verdict.valid, "sustainable": sustainable, "generator_saturated": verdict.generator_saturated,
              "problems": reported, "thresholds": thresholds.__dict__, "clock": clock, "negatives": negatives,
+             "diagnostic": diagnostic, "mosquitto": mosquitto,
              # Environment, integrity and CPU problems alone, so bench/report.py can re-evaluate D8 with other thresholds.
              "run_problems": all_problems}, histograms)
     r.down()
@@ -519,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     r.add_argument("--rate", type=float, help="messages per second (default: the trial rate with --trial)")
     r.add_argument("--repetition", type=int, default=1)
     r.add_argument("--trial", action="store_true", help="the short end-to-end trial; never publishable")
+    r.add_argument("--diagnostic", action="store_true",
+                   help="throughput, measured for trial.measured_s, to reproduce a behaviour; never publishable")
     r.add_argument("--sensitivity", action="store_true",
                    help="throughput with the bridge at bridge.log_level_sensitivity (owner, DETENTE 3.3.d)")
     sub.add_parser("plan", help="print the runs of STEP 2 and the time they need")
@@ -535,10 +588,13 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
             p.error("--rate is required unless --trial or --mode calibrate-meter")
         if args.sensitivity and args.mode != "throughput":
             p.error("--sensitivity applies to --mode throughput only")
+        if args.diagnostic and (args.mode != "throughput" or args.trial or args.sensitivity):
+            p.error("--diagnostic applies to --mode throughput only, without --trial or --sensitivity")
         if args.mode == "calibrate-generator":
             runner = lambda: calibrate_generator(bench, rate, args.repetition)  # noqa: E731
         else:
-            runner = lambda: execute(bench, args.mode, rate, args.repetition, args.trial, args.sensitivity)  # noqa: E731
+            runner = lambda: execute(bench, args.mode, rate, args.repetition, args.trial, args.sensitivity,  # noqa: E731
+                                     args.diagnostic)
     try:
         return runner()
     except BaseException:

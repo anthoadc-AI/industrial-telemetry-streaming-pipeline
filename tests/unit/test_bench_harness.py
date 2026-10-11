@@ -404,3 +404,43 @@ def test_ladder_ends_where_an_instrument_was_at_its_limit_and_e2_counts_one_revi
     assert "intermediate step 2500" not in text
     assert "Candidate: 2000/s; runs 5 of the 5 E2 needs; confirmed." in text  # the old run is not one of them
 
+
+
+# --- Mosquitto evidence (owner, after the E2 loss at 2000 msg/s) ----------------------------------------------
+
+
+def test_mosquitto_drop_notices_are_read_from_its_log():
+    log = ("1791760640: mosquitto version 2.1.2 running\n"
+           "1791760649: Outgoing messages are being dropped for client bridge-1.\n"
+           "1791760650: New client connected from 172.18.0.5:41234 as bench-sys-7.\n"
+           "1791760667: Outgoing messages are being dropped for client slow-bytes.\n"
+           "not a log line: Outgoing messages are being dropped for client x.\n")
+    assert analysis.mosquitto_drop_notices(log) == [(1791760649, "bridge-1"), (1791760667, "slow-bytes")]
+    assert analysis.mosquitto_drop_notices("") == []
+
+
+def test_mosquitto_summary_turns_cumulative_counters_into_increases():
+    samples = []
+    for t, received, sent, dropped, stored in ((0, 0, 0, 0, 55), (10_000, 20_000, 19_000, 0, 1_090),
+                                               (20_000, 50_000, 47_000, 1_960, 1_096), (30_000, 80_000, 77_000, 1_960, 60)):
+        samples += [(t + 3, "received", received), (t + 5, "sent", sent), (t + 7, "dropped", dropped),
+                    (t + 9, "stored", stored)]
+    s = analysis.mosquitto_summary(samples)
+    assert (s["updates"], s["dropped_total"], s["stored_max"], s["first_update_with_drops_s"]) == (4, 1_960, 1_096, 20)
+    assert s["intervals"][0] == {"wall_s": 0, "stored": 55, "received_delta": None, "sent_delta": None, "dropped_delta": None}
+    assert s["intervals"][2] == {"wall_s": 20, "stored": 1_096, "received_delta": 30_000, "sent_delta": 28_000,
+                                 "dropped_delta": 1_960}
+    assert analysis.mosquitto_summary([]) == {"updates": 0, "dropped_total": 0, "stored_max": None,
+                                              "first_update_with_drops_s": None, "intervals": []}
+
+
+def test_a_diagnostic_run_is_listed_but_never_publishable_nor_on_the_ladder(tmp_path):
+    write_run(tmp_path, "a-1000", "throughput", 1000, 20.0)
+    write_run(tmp_path, "b-3000-diag", "throughput", 3000, 20.0)
+    m = json.loads((tmp_path / "b-3000-diag" / "manifest.json").read_text(encoding="utf-8"))
+    m["diagnostic"] = True
+    (tmp_path / "b-3000-diag" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 3000.0), 0.8, 5)
+    assert "| b-3000-diag | throughput (diagnostic) | 3000 | INFO | yes | valid yes | no |" in text
+    assert "- 3000/s" not in text and "The ladder is not complete: next step 3000/s." in text

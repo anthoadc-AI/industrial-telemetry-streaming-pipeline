@@ -229,3 +229,44 @@ def plan(bench: BenchmarkConfig) -> dict:
         "expected": case(max(1, n_gen // 2), max(1, n_ladder // 2)),
         "worst": case(n_gen, n_ladder),
     }
+
+
+# --- Mosquitto (owner, after the E2 loss at 2000 msg/s) ---------------------------------------------------------
+
+# The $SYS counters the harness keeps, by short name. Mosquitto publishes them every sys_interval (10 s by default,
+# measured in the 2.1.2 container; the stack's mosquitto.conf does not set it), cumulative since the broker started.
+MOSQUITTO_SYS = {"$SYS/broker/publish/messages/dropped": "dropped", "$SYS/broker/messages/received": "received",
+                 "$SYS/broker/messages/sent": "sent", "$SYS/broker/store/messages/count": "stored",
+                 "$SYS/broker/store/messages/bytes": "stored_bytes"}
+_DROP_NOTICE = "Outgoing messages are being dropped for client "
+
+
+def mosquitto_drop_notices(log_text: str) -> list[tuple[int, str]]:
+    """(epoch seconds, client id) of every "Outgoing messages are being dropped for client X." line of Mosquitto's
+    log: the broker's own record that a client's queue was full."""
+    notices = []
+    for line in log_text.splitlines():
+        stamp, sep, rest = line.partition(": ")
+        if sep and stamp.strip().isdigit() and rest.startswith(_DROP_NOTICE):
+            notices.append((int(stamp), rest[len(_DROP_NOTICE):].rstrip(".")))
+    return notices
+
+
+def mosquitto_summary(samples: list[tuple[float, str, float]]) -> dict:
+    """From the $SYS samples (wall ms, short name, value), one row per update instant with each counter's increase
+    since the previous update (received, sent, dropped) and the stored count; and the totals."""
+    rows: dict[float, dict[str, float]] = {}
+    for t, name, value in samples:
+        rows.setdefault(round(t / 1000), {})[name] = value  # one update publishes every counter within a second
+    out, last = [], {}
+    for second in sorted(rows):
+        row = {**last, **rows[second]}
+        out.append({"wall_s": second, "stored": row.get("stored"),
+                    **{f"{k}_delta": (row[k] - last[k]) if k in row and k in last else None
+                       for k in ("received", "sent", "dropped")}})
+        last = row
+    first_drop = next((r["wall_s"] for r in out if r["dropped_delta"]), None)
+    return {"updates": len(out), "dropped_total": last.get("dropped", 0), "stored_max": max(
+                (r["stored"] for r in out if r["stored"] is not None), default=None),
+            "first_update_with_drops_s": first_drop, "intervals": out}
+
