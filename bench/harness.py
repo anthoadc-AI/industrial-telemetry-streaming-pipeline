@@ -9,8 +9,8 @@
     python -m bench.harness plan                 (the runs of STEP 2 and their duration)
 
 The bridge runs at INFO, the product default, in every run except --sensitivity (owner, DETENTE 3.3.d). The two
-calibration modes measure the highest rate the generator and the meter sustain on their own; the ladder is capped
-at the lower one.
+calibration modes measure the highest rate the generator and the meter sustain on their own, with the ladder's own
+rule for a client's CPU (owner, DETENTE 3.3.e); the ladder is capped at the lower one.
 
 Every parameter comes from config/benchmark.yaml. A run:
 
@@ -435,19 +435,23 @@ def calibrate_generator(bench: BenchmarkConfig, rate: float, repetition: int) ->
     r.save_logs("generator")
     generator = json.loads((r.out / "generator.json").read_text(encoding="utf-8"))
     late = Histogram.from_json(generator["late"])
-    saturated = criteria.generator_saturated(late, thresholds_of(bench))
-    problems = list(r.env_problems)
-    if generator["sent"] != generator["planned"] or generator["acknowledged"] != generator["sent"]:
-        problems.append(f"sent {generator['sent']} of {generator['planned']}, acknowledged {generator['acknowledged']}")
-    sustained = not problems and not saturated
+    # One criterion with the ladder (owner, DETENTE 3.3.e): lateness, CPU share of a core, and pending
+    # acknowledgements at saturation make the rate "not sustained"; only environment or integrity failures make the
+    # run invalid. bench/report.py re-evaluates every stored run with the same function.
+    peaks, _ = analysis.cpu_problems(r.cpu.samples, bench.max_client_core_fraction)
+    verdict = criteria.generator_calibration(generator["planned"], generator["sent"], generator["acknowledged"],
+                                             generator.get("stopped_early", False), late, peaks.get("generator"),
+                                             r.env_problems, thresholds_of(bench), bench.max_client_core_fraction)
     r.write({"publishable": False, "finished": finished.isoformat(), "measured_s": duration, "t0_ms": t0_ms,
-             "valid": not problems, "generator_saturated": saturated, "sustained": sustained,
+             "valid": verdict.valid, "generator_saturated": verdict.valid and not verdict.sustained,
+             "sustained": verdict.sustained, "stopped_early": generator.get("stopped_early", False),
              "counters": {k: generator[k] for k in ("planned", "sent", "acknowledged", "send_cpu_s", "send_wall_s")},
-             "problems": problems + (["generator saturated"] if saturated else []), "run_problems": problems},
+             "problems": verdict.reasons, "environment_problems": list(r.env_problems), "run_problems": list(r.env_problems)},
             {"generator_late": generator["late"]})
     r.down()
-    print(json.dumps({"event": "run_finished", "run_id": r.rid, "sustained": sustained, "late": late.summary()}), flush=True)
-    return 0 if not problems else 1
+    print(json.dumps({"event": "run_finished", "run_id": r.rid, "valid": verdict.valid, "sustained": verdict.sustained,
+                      "reasons": verdict.reasons, "late": late.summary()}), flush=True)
+    return 0 if verdict.valid else 1
 
 
 def calibrate_meter(bench: BenchmarkConfig, repetition: int) -> int:  # pragma: no cover
@@ -474,11 +478,17 @@ def calibrate_meter(bench: BenchmarkConfig, repetition: int) -> int:  # pragma: 
     r.save_logs("meter-calibration")
     meter = json.loads((r.out / "meter.json").read_text(encoding="utf-8"))
     calibration = meter["calibration"]
-    problems = r.env_problems + problems
+    environment_problems = list(r.env_problems)
+    problems = environment_problems + problems
     if calibration["read"] < count:
         problems.append(f"meter read {calibration['read']} of {count}")
+    # Its rate within max_client_core_fraction of a core, the ladder's rule for a client (owner, DETENTE 3.3.e).
+    peaks, _ = analysis.cpu_problems(r.cpu.samples, bench.max_client_core_fraction)
+    if calibration.get("records_per_s"):
+        calibration["cap_per_s"] = criteria.meter_calibration_cap(calibration["records_per_s"], peaks.get("meter-calibration"),
+                                                                  bench.max_client_core_fraction)
     r.write({"publishable": False, "finished": finished.isoformat(), "valid": not problems, "calibration": calibration,
-             "problems": problems, "run_problems": problems}, {})
+             "problems": problems, "environment_problems": environment_problems, "run_problems": problems}, {})
     r.down()
     print(json.dumps({"event": "run_finished", "run_id": r.rid, "valid": not problems, "calibration": calibration}), flush=True)
     return 0 if not problems else 1

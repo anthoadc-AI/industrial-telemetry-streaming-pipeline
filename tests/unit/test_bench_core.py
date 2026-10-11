@@ -339,3 +339,63 @@ def test_benchmark_config_rejections(tmp_path, old, new, message):
 
 def test_benchmark_linger_override(tmp_path):
     assert load_benchmark_config(benchmark_broken(tmp_path, "  linger_ms: null", "  linger_ms: 0")).bridge_linger_ms == 0
+
+
+# --- calibration (owner, DETENTE 3.3.e: one criterion with the ladder) ------------------------------------------
+
+T = criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0)
+
+
+def late_hist(*values):
+    h = Histogram()
+    for v in values:
+        h.add(v)
+    return h
+
+
+@pytest.mark.parametrize("kwargs, valid, sustained, reason", [
+    ({}, True, True, None),
+    ({"cpu": 89.4}, True, False, "generator at 89 % of a core (limit 80 %)"),  # the ladder's client rule
+    ({"late": (0.2,) * 98 + (7.4, 7.4)}, True, False, "lateness p99 7.4 ms"),
+    # Pending acknowledgements at saturation: not sustained, not invalid (the 8000 msg/s runs of block 1).
+    ({"cpu": 101.0, "acked": 283_395}, True, False, "196605 acknowledgements still pending"),
+    # Missing acknowledgements without saturation: an integrity failure.
+    ({"acked": 479_000}, False, False, "1000 acknowledgements missing, the generator not saturated"),
+    ({"env": ["not on AC power"]}, False, False, "not on AC power"),
+    ({"sent": 470_000}, False, False, "sent 470000 of 480000"),
+    ({"stopped": True}, False, False, "(stopped early)"),
+])
+def test_generator_calibration_verdict(kwargs, valid, sustained, reason):
+    sent = kwargs.get("sent", 480_000)
+    v = criteria.generator_calibration(480_000, sent, kwargs.get("acked", sent), kwargs.get("stopped", False),
+                                       late_hist(*kwargs.get("late", (0.2,))), kwargs.get("cpu", 52.0),
+                                       kwargs.get("env", []), T, 0.8)
+    assert (v.valid, v.sustained) == (valid, sustained)
+    assert (reason is None and v.reasons == []) or any(reason in r for r in v.reasons)
+
+
+def test_generator_calibration_without_cpu_samples_judges_lateness_alone():
+    v = criteria.generator_calibration(10, 10, 10, False, late_hist(0.3), None, [], T, 0.8)
+    assert (v.valid, v.sustained) == (True, True)
+
+
+def test_meter_cap_within_the_client_core_share():
+    assert criteria.meter_calibration_cap(23547.0, 100.09, 0.8) == pytest.approx(18820.7, abs=0.1)
+    assert criteria.meter_calibration_cap(5000.0, 60.0, 0.8) == 5000.0  # already within the share: its rate
+    assert criteria.meter_calibration_cap(5000.0, None, 0.8) == 5000.0
+
+
+def test_calibrated_cap_needs_both_and_walks_up_to_the_first_unsustained_rate():
+    ok, cpu = criteria.CalibrationVerdict(True, True, []), criteria.CalibrationVerdict(True, False, ["cpu"])
+    bad = criteria.CalibrationVerdict(False, False, ["env"])
+    gen = [(1000.0, ok), (2000.0, ok), (4000.0, cpu), (6000.0, ok)]  # 6000 never counts: 4000 failed first
+    assert criteria.calibrated_cap(gen, [18820.7]) == (2000.0, 18820.7, 2000.0, "")
+    assert criteria.calibrated_cap(gen, [1500.0])[2] == 1500.0
+    g, m, cap, note = criteria.calibrated_cap(gen, [])
+    assert (g, m, cap) == (2000.0, None, None) and note == "no ladder cap: meter not calibrated"
+    # An invalid run and its valid repetition at one rate: the valid one decides.
+    assert criteria.calibrated_cap([(1000.0, bad), (1000.0, ok), (2000.0, cpu)], [9e3])[0] == 1000.0
+    # Only invalid runs at a rate: undetermined there, the walk stops.
+    g, _, cap, note = criteria.calibrated_cap([(1000.0, ok), (2000.0, bad)], [])
+    assert g == 1000.0 and cap is None and "no valid generator run at 2000/s" in note
+    assert criteria.calibrated_cap([], [9e3])[3] == "no ladder cap: generator not calibrated"

@@ -155,3 +155,81 @@ def confirmed(repetitions: list[RunInput], t: Thresholds) -> tuple[bool, list[li
     """E2: a candidate step stands only if every one of its repetitions is valid and sustainable."""
     verdicts = [evaluate(r, t) for r in repetitions]
     return bool(verdicts) and all(v.sustainable for v in verdicts), [v.reasons for v in verdicts]
+
+
+# --- calibration (owner, DETENTE 3.3.e) --------------------------------------------------------------------------
+
+
+@dataclass
+class CalibrationVerdict:
+    valid: bool
+    sustained: bool
+    reasons: list[str]  # why invalid when not valid, else why not sustained
+
+
+def generator_calibration(planned: int, sent: int, acknowledged: int, stopped_early: bool, late: Histogram,
+                          cpu_peak_percent: float | None, environment_problems: list[str], t: Thresholds,
+                          max_core_fraction: float) -> CalibrationVerdict:
+    """The generator alone at one rate, judged by the ladder's own criteria (owner, DETENTE 3.3.e).
+
+    Not sustained (a valid answer: the generator cannot drive that rate): its lateness above the limits, or its CPU
+    above max_core_fraction of a core, the rule that flags a client in a pipeline run. Acknowledgements still pending
+    when its wait ends are part of that saturation, not a failure of the run. Invalid only for environment or
+    integrity failures: a problem of the host, the generator not sending what it planned, or acknowledgements
+    missing although the generator was not saturated.
+    """
+    invalid = list(environment_problems)
+    if stopped_early or sent != planned:
+        invalid.append(f"sent {sent} of {planned}" + (" (stopped early)" if stopped_early else ""))
+    saturation = []
+    if generator_saturated(late, t):
+        saturation.append(f"lateness p99 {late.percentile(99)} ms, max {late.max_ms:.1f} ms "
+                          f"(limits {t.max_late_p99_ms:g} and {t.max_late_max_ms:g} ms)")
+    if cpu_peak_percent is not None and cpu_peak_percent > max_core_fraction * 100:
+        saturation.append(f"generator at {cpu_peak_percent:.0f} % of a core (limit {max_core_fraction * 100:.0f} %)")
+    pending = sent - acknowledged
+    if pending > 0:
+        if saturation:
+            saturation.append(f"{pending} acknowledgements still pending when its wait ended")
+        else:
+            invalid.append(f"{pending} acknowledgements missing, the generator not saturated")
+    if invalid:
+        return CalibrationVerdict(False, False, invalid)
+    return CalibrationVerdict(True, not saturation, saturation)
+
+
+def meter_calibration_cap(records_per_s: float, cpu_peak_percent: float | None, max_core_fraction: float) -> float:
+    """The highest rate the meter reads within max_core_fraction of a core (owner, DETENTE 3.3.e: one criterion).
+
+    The calibration reads as fast as the meter can, so it runs at a full core; scaled to the limit, assuming its CPU
+    proportional to the rate it reads. Without a CPU sample, or below the limit, its measured rate.
+    """
+    if not cpu_peak_percent or cpu_peak_percent <= max_core_fraction * 100:
+        return records_per_s
+    return round(records_per_s * max_core_fraction * 100 / cpu_peak_percent, 1)
+
+
+def calibrated_cap(generator: list[tuple[float, CalibrationVerdict]],
+                   meter_caps: list[float]) -> tuple[float | None, float | None, float | None, str]:
+    """(generator's cap, meter's cap, ladder cap, note) from every calibration run (owner, DETENTE 3.3.e).
+
+    The generator's cap is the highest rate sustained with every lower rate sustained: at each rate, ascending, a
+    valid run that sustained it counts; a rate with valid runs and none sustained ends the walk; a rate with no
+    valid run ends it too, undetermined. The meter's is the lowest of its valid runs. The ladder is capped only when
+    both are calibrated.
+    """
+    gen_cap, note = None, ""
+    for rate in sorted({r for r, _ in generator}):
+        verdicts = [v for r, v in generator if r == rate]
+        valid = [v for v in verdicts if v.valid]
+        if not valid:
+            note = f"no valid generator run at {rate:g}/s"
+            break
+        if not any(v.sustained for v in valid):
+            break
+        gen_cap = rate
+    meter_cap = min(meter_caps) if meter_caps else None
+    missing = [name for name, cap in (("generator", gen_cap), ("meter", meter_cap)) if cap is None]
+    if missing:
+        return gen_cap, meter_cap, None, f"no ladder cap: {' and '.join(missing)} not calibrated" + (f" ({note})" if note else "")
+    return gen_cap, meter_cap, min(gen_cap, meter_cap), note
