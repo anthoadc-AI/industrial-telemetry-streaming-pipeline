@@ -4,8 +4,9 @@
 
 Reads every run's manifest.json, histograms, series.csv and counters.json and prints Markdown:
 - what each figure and share contains;
-- the calibration (owner, DETENTE 3.3.d): the highest rate the generator and the meter sustain alone, and the ladder
-  capped at the lower of the two;
+- the calibration (owner, DETENTE 3.3.d and 3.3.e): every calibration run with its validity, CPU and minimum host
+  free memory, re-evaluated from its stored data; the highest rate the generator and the meter sustain alone under
+  the ladder's own rule for a client's CPU; the ladder capped at the lower of the two, only when both are calibrated;
 - every pipeline run: mode, rate, bridge log level, validity, publishable, F1 (end to end) with its ingest and
   produce_to_visible shares, F2, F4, the generator's lateness and the problems;
 - the throughput ladder (F3) re-evaluated from the raw results with the thresholds of config/benchmark.yaml or
@@ -78,40 +79,71 @@ def triple(h: Histogram | None) -> str:
     return f"{fmt(s['p50'])} / {fmt(s['p95'])} / {fmt(s['p99'])} (n={s['n']})"
 
 
-def calibration(runs: list[dict]) -> tuple[float | None, float | None, list[str]]:
-    """(generator's highest sustained rate, meter's lowest measured rate, lines)."""
-    gen = sorted((r for r in runs if r["manifest"]["mode"] == "calibrate-generator"), key=lambda r: r["manifest"]["rate_per_s"])
-    met = [r for r in runs if r["manifest"]["mode"] == "calibrate-meter" and r["manifest"].get("valid")]
-    lines, gen_max = [], None
-    for r in gen:
+def environment_problems(m: dict) -> list[str]:
+    """A calibration run's environment problems. Manifests written before DETENTE 3.3.e have no such field: their
+    run_problems held the environment problems plus the generator's acknowledgement check ("sent N of M,
+    acknowledged K"), now judged by criteria.generator_calibration from the counters instead."""
+    if "environment_problems" in m:
+        return list(m["environment_problems"])
+    return [p for p in m.get("run_problems", []) if not p.startswith("sent ")]
+
+
+def calibration(runs: list[dict], bench_fraction: float, t: criteria.Thresholds) -> tuple[float | None, list[str]]:
+    """(ladder cap, lines): every calibration run re-evaluated from its stored data with the current criterion."""
+    cal = sorted((r for r in runs if r["manifest"]["mode"] in ("calibrate-generator", "calibrate-meter")),
+                 key=lambda r: (r["manifest"]["mode"], r["manifest"]["rate_per_s"], r["dir"]))
+    if not cal:
+        return None, ["No calibration runs."]
+    lines = ["Every calibration run, re-evaluated here from its stored data with the current criterion (owner, "
+             "DETENTE 3.3.e: the ladder's own rule for a client's CPU; pending acknowledgements at saturation mean "
+             "\"not sustained\"). \"Recorded\" is the verdict its manifest wrote when it ran.", "",
+             "| Run | Mode | Rate/s | Valid | Sustained | Recorded | Lateness p50/p95/p99 ms | Client CPU peak | "
+             "Min host free GB | Reasons |", "|---|---|---|---|---|---|---|---|---|---|"]
+    generator, meter_caps = [], []
+    for r in cal:
         m = r["manifest"]
-        lines.append(f"- generator at {m['rate_per_s']:g}/s: {'sustained' if m.get('sustained') else 'not sustained'}; "
-                     f"lateness {triple(r['hists'].get('generator_late'))} ms")
-        if not m.get("sustained"):
-            break
-        gen_max = m["rate_per_s"]
-    rates = [r["manifest"]["calibration"]["records_per_s"] for r in met if r["manifest"]["calibration"].get("records_per_s")]
-    meter_max = min(rates) if rates else None
-    for r in met:
-        c = r["manifest"]["calibration"]
-        lines.append(f"- meter: {c['read']} records in {fmt(c['elapsed_s'])} s, {fmt(c['records_per_s'])} records/s")
-    return gen_max, meter_max, lines
+        mem = fmt(m.get("min_host_free_memory_gb"))
+        recorded = f"valid {'yes' if m.get('valid') else 'no'}" + (
+            f", sustained {'yes' if m.get('sustained') else 'no'}" if m["mode"] == "calibrate-generator" else "")
+        if m["mode"] == "calibrate-generator":
+            c, cpu = m["counters"], (m.get("cpu_peak_percent") or {}).get("generator")
+            v = criteria.generator_calibration(c["planned"], c["sent"], c["acknowledged"], m.get("stopped_early", False),
+                                               r["hists"]["generator_late"], cpu, environment_problems(m), t, bench_fraction)
+            generator.append((m["rate_per_s"], v))
+            lines.append(f"| {r['dir']} | generator | {m['rate_per_s']:g} | {'yes' if v.valid else 'no'} | "
+                         f"{'yes' if v.sustained else 'no'} | {recorded} | {triple(r['hists'].get('generator_late'))} | "
+                         f"generator {fmt(cpu)} % | {mem} | {'; '.join(v.reasons) or '-'} |")
+        else:
+            cal_m, cpu = m.get("calibration", {}), (m.get("cpu_peak_percent") or {}).get("meter-calibration")
+            reasons = list(m.get("problems", []))
+            if m.get("valid") and cal_m.get("records_per_s"):
+                cap = criteria.meter_calibration_cap(cal_m["records_per_s"], cpu, bench_fraction)
+                meter_caps.append(cap)
+                reasons.append(f"read {cal_m['read']} records in {fmt(cal_m['elapsed_s'])} s, {fmt(cal_m['records_per_s'])}"
+                               f" records/s; within {bench_fraction * 100:.0f} % of a core: {fmt(cap)}/s "
+                               "(assumes its CPU proportional to its rate)")
+            lines.append(f"| {r['dir']} | meter | {fmt(cal_m.get('records_per_s'))} | {'yes' if m.get('valid') else 'no'} | - | "
+                         f"{recorded} | - | meter {fmt(cpu)} % | {mem} | {'; '.join(reasons) or '-'} |")
+    gen_cap, meter_cap, cap, note = criteria.calibrated_cap(generator, meter_caps)
+    rate = lambda v: "-" if v is None else f"{v:g}/s"  # noqa: E731
+    lines.append("")
+    lines.append(f"Generator cap {rate(gen_cap)}; meter cap {rate(meter_cap)}" + (f"; {note}" if note else "") + ".")
+    if cap is not None:
+        lines.append(f"Ladder cap: {cap:g}/s (the lower of generator {rate(gen_cap)} and meter {rate(meter_cap)}).")
+    return cap, lines
 
 
-def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, ...] = ()) -> str:
+def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, ...] = (),
+           max_core_fraction: float = 0.8) -> str:
     lines = ["# Benchmark figures (generated by bench/report.py; do not edit)", "",
              f"Thresholds (D8): p99 < {t.p99_ms:g} ms, lag <= {t.max_lag_s:g} s, slope <= {t.max_lag_slope_per_s:g} s/s, "
              f"lost <= {t.max_lost}; generator lateness p99 <= {t.max_late_p99_ms:g} ms, max <= {t.max_late_max_ms:g} ms.", "",
              DEFINITIONS]
 
-    gen_max, meter_max, cal_lines = calibration(runs)
-    caps = [c for c in (gen_max, meter_max) if c is not None]
-    cap = min(caps) if caps else None
+    cap, cal_lines = calibration(runs, max_core_fraction, t)
     effective, capped = criteria.cap_ladder(ladder_per_s, cap)
-    lines += ["## Calibration", ""] + (cal_lines or ["No calibration runs."])
+    lines += ["## Calibration", ""] + cal_lines
     if cap is not None:
-        rate = lambda v: "-" if v is None else f"{v:g}/s"  # noqa: E731
-        lines.append(f"\nLadder cap: {cap:g}/s (the lower of generator {rate(gen_max)} and meter {rate(meter_max)}).")
         if capped:
             lines.append(f"The ladder is capped there: steps above {cap:g}/s are not run; a figure at the cap is "
                          "limited by the measuring tools, not by the pipeline.")
@@ -190,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin comma
     runs = [load_run(d) for d in sorted(args.results.iterdir()) if (d / "manifest.json").is_file()]
     t = criteria.Thresholds(args.p99_ms, args.max_lag_s, args.max_lag_slope, args.max_lost,
                             bench.max_late_p99_ms, bench.max_late_max_ms)
-    sys.stdout.write(render(runs, t, bench.ladder_per_s))
+    sys.stdout.write(render(runs, t, bench.ladder_per_s, bench.max_client_core_fraction))
     return 0
 
 

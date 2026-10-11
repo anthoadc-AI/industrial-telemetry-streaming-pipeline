@@ -222,31 +222,66 @@ def test_report_no_sustainable_step_and_generator_limit(tmp_path):
     assert "Limited by the generator" in report.render(runs, t)
 
 
-def write_calibration(root: Path, name: str, mode: str, rate: float, sustained: bool = True, records_per_s=None) -> None:
+def write_calibration(root: Path, name: str, mode: str, rate: float, cpu: float = 50.0, records_per_s=None, acked=None,
+                      late=0.3, manifest_extra=None) -> None:
+    """A calibration run as the harness stores it; without manifest_extra, as written before DETENTE 3.3.e."""
     d = root / name
     d.mkdir()
-    late = Histogram()
-    late.add(0.3)
-    manifest = {"mode": mode, "rate_per_s": rate, "trial": False, "sustained": sustained, "valid": True}
+    h = Histogram()
+    for _ in range(100):
+        h.add(late)
+    manifest = {"mode": mode, "rate_per_s": rate, "trial": False, "valid": True, "sustained": True, "run_problems": [],
+                "min_host_free_memory_gb": 5.7,
+                "cpu_peak_percent": {"generator" if mode == "calibrate-generator" else "meter-calibration": cpu}}
     if mode == "calibrate-meter":
         manifest["calibration"] = {"read": 1000, "elapsed_s": 1000 / records_per_s, "records_per_s": records_per_s}
+    else:
+        sent = int(rate * 60)
+        manifest["counters"] = {"planned": sent, "sent": sent, "acknowledged": sent if acked is None else acked}
+        if acked is not None and acked < sent:  # the old acknowledgement check, as the old harness recorded it
+            manifest.update({"valid": False, "sustained": False,
+                             "run_problems": [f"sent {sent} of {sent}, acknowledged {acked}"]})
+        (d / "latency_generator_late.json").write_text(json.dumps(h.to_json()), encoding="utf-8")
+    manifest.update(manifest_extra or {})
     (d / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    if mode == "calibrate-generator":
-        (d / "latency_generator_late.json").write_text(json.dumps(late.to_json()), encoding="utf-8")
 
 
 def test_report_calibration_caps_the_ladder_and_sensitivity(tmp_path):
     write_calibration(tmp_path, "c1", "calibrate-generator", 1000)
     write_calibration(tmp_path, "c2", "calibrate-generator", 2000)
-    write_calibration(tmp_path, "c3", "calibrate-generator", 4000, sustained=False)
-    write_calibration(tmp_path, "c4", "calibrate-meter", 600000, records_per_s=3000.0)
+    write_calibration(tmp_path, "c3", "calibrate-generator", 4000, cpu=89.4)
+    write_calibration(tmp_path, "c4", "calibrate-meter", 600000, cpu=60.0, records_per_s=3000.0)
     write_run(tmp_path, "t1", "throughput", 250, 20.0)
     write_run(tmp_path, "t2", "throughput", 250, 15.0, sensitivity=True)
     runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
     t = criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0)
-    text = report.render(runs, t, (250.0, 500.0, 1000.0, 2000.0, 4000.0))
-    assert "generator at 4000/s: not sustained" in text and "meter: 1000 records" in text
+    text = report.render(runs, t, (250.0, 500.0, 1000.0, 2000.0, 4000.0), 0.8)
+    # Every calibration run, with validity, verdict, CPU and minimum host free memory (DETENTE 3.3.e).
+    assert "| c3 | generator | 4000 | yes | no | valid yes, sustained yes |" in text
+    assert "generator 89.4 % | 5.7 | generator at 89 % of a core (limit 80 %) |" in text
+    assert "| c4 | meter | 3000.0 | yes | - | valid yes | - | meter 60.0 % | 5.7 |" in text
     assert "Ladder cap: 2000/s (the lower of generator 2000/s and meter 3000/s)." in text
     assert "steps above 2000/s are not run" in text
     assert "| 250 | INFO | 1 | 1 of 1 |" in text and "| 250 | WARNING | 1 | 1 of 1 |" in text
     assert "## Throughput ladder" in text and "- 250/s: sustainable" in text  # the sensitivity run is not on the ladder
+
+
+def test_report_reevaluates_stored_runs_and_needs_both_calibrations(tmp_path):
+    """Block 1's runs, from their stored data: the old acknowledgement check made 8000/s invalid; under the single
+    criterion it is a valid run that did not sustain the rate. No meter run: no ladder cap."""
+    write_calibration(tmp_path, "g1000", "calibrate-generator", 1000)
+    write_calibration(tmp_path, "g8000", "calibrate-generator", 8000, cpu=101.0, acked=283_395, late=7.4)
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 8000.0), 0.8)
+    assert "| g8000 | generator | 8000 | yes | no | valid no, sustained no |" in text
+    assert "196605 acknowledgements still pending when its wait ended" in text
+    assert "Generator cap 1000/s; meter cap -; no ladder cap: meter not calibrated." in text
+    assert "Ladder cap" not in text and "are not run" not in text
+    # A manifest written after the change keeps its environment problems apart: one of them makes the run invalid.
+    write_calibration(tmp_path, "g2000", "calibrate-generator", 2000,
+                      manifest_extra={"environment_problems": ["not on AC power"]})
+    text = report.render([report.load_run(d) for d in sorted(tmp_path.iterdir())],
+                         criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (), 0.8)
+    assert "| g2000 | generator | 2000 | no | no |" in text and "Generator cap 1000/s" in text
+    legacy = {"run_problems": ["host free memory fell to 1.2 GB", "sent 1 of 2, acknowledged 0"]}
+    assert report.environment_problems(legacy) == ["host free memory fell to 1.2 GB"]
