@@ -154,6 +154,16 @@ def cap_ladder(ladder_per_s: tuple[float, ...], max_rate: float | None) -> tuple
     return kept, len(kept) < len(ladder_per_s)
 
 
+# A run's reasons that mean an instrument (the generator or the meter) was at its limit, not the pipeline.
+INSTRUMENT_REASONS = ("CPU-bound instrument(s)", "generator saturated")
+
+
+def instrument_only(reasons: list[str]) -> bool:
+    """Every reason is an instrument at its limit: nothing lost, no Mosquitto drop, no environment problem (those
+    are reasons of their own)."""
+    return bool(reasons) and all(r.startswith(INSTRUMENT_REASONS) for r in reasons)
+
+
 def confirmed(repetitions: list[RunInput], t: Thresholds) -> tuple[bool, list[list[str]]]:
     """E2: a candidate step stands only if every one of its repetitions is valid and sustainable."""
     verdicts = [evaluate(r, t) for r in repetitions]

@@ -206,6 +206,57 @@ class SysSampler(threading.Thread):  # pragma: no cover - needs Mosquitto
         self.client.disconnect()
 
 
+class SubscriptionWatch:  # pragma: no cover - needs Mosquitto
+    """Mosquitto's subscription count ($SYS), to tell when the bridge has subscribed whatever its log level."""
+
+    def __init__(self):
+        import paho.mqtt.client as mqtt
+        self.retained: float | None = None
+        self.updates: list[float] = []
+        self.client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+                                  client_id=f"bench-subs-{os.getpid()}")
+        self.client.on_message = self._message
+
+    def _message(self, client, userdata, msg):
+        try:
+            value = float(msg.payload.decode())
+        except ValueError:
+            return
+        if msg.retain and self.retained is None:
+            self.retained = value
+        else:
+            self.updates.append(value)
+
+    def start(self) -> None:
+        self.client.connect("localhost", 1883)
+        self.client.subscribe(analysis.SYS_SUBSCRIPTIONS, qos=0)
+        self.client.loop_start()
+
+    def baseline(self, timeout: float = 25) -> float:
+        """Waits for one update (the count including this watcher), at most timeout."""
+        deadline = time.monotonic() + timeout
+        while not self.updates and time.monotonic() < deadline:
+            time.sleep(0.2)
+        base = analysis.subscription_baseline(self.retained, list(self.updates))
+        if base is None:
+            raise RuntimeError(f"mosquitto: no {analysis.SYS_SUBSCRIPTIONS} within {timeout:g} s")
+        self.updates.clear()
+        return base
+
+    def wait(self, baseline: float, expected: int, timeout: float = 60) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if analysis.bridge_subscribed(list(self.updates), baseline, expected):
+                return
+            time.sleep(0.5)
+        raise RuntimeError(f"bridge: Mosquitto's subscription count did not reach {baseline:g} + {expected} within "
+                           f"{timeout:g} s (published: {self.updates})")
+
+    def stop(self) -> None:
+        self.client.loop_stop()
+        self.client.disconnect()
+
+
 class CpuSampler(threading.Thread):  # pragma: no cover - needs Docker
     """docker stats of the project's containers, as fast as it answers (about every 2 s), until stopped."""
 
@@ -366,8 +417,17 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
     r.mode = mode
     measured_s = bench.trial_measured_s if trial or (diagnostic and not full_window) else bench.measured_s
     r.start_stack()
-    r.compose("--profile", "pipeline", "up", "-d", "--wait", "--no-deps", "--force-recreate", "bridge", "alarm-consumer")
-    wait_for_event(r.override_file, "bridge", "mqtt_subscribed")
+    # The bridge's subscription, from Mosquitto's count, not its INFO log line, which a bridge at WARNING never writes
+    # (owner, DETENTE 3.3.g).
+    watch = SubscriptionWatch()
+    watch.start()
+    try:
+        baseline = watch.baseline()
+        r.compose("--profile", "pipeline", "up", "-d", "--wait", "--no-deps", "--force-recreate", "bridge",
+                  "alarm-consumer")
+        watch.wait(baseline, analysis.bridge_subscriptions(r.config.bridge.drop_monitor_enabled))
+    finally:
+        watch.stop()
     wait_for_event(r.override_file, "alarm-consumer", "run_started")
 
     raw_topic, dlq_topic = r.config.topics.telemetry_raw.name, r.config.topics.kafka["telemetry_dlq"].name

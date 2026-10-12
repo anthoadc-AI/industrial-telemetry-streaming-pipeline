@@ -20,8 +20,12 @@ two invalid runs in a row at the same point (an invalid run is kept and repeated
 where both runs were invalid with an instrument at its limit among the reasons, which ends the ladder there
 ("limited by the measuring tools", criteria.ladder, DETENTE 3.3.f); an ambiguous candidate: no sustainable step,
 a valid E2 run at the candidate that is not sustainable, or a valid E2 run at the next step that is sustainable.
-The diagnostic is run once and never repeated. Every decision goes to bench/results/series-<start>.log (JSON
-lines) and into the block's commit.
+The diagnostic is run once and never repeated. A run that leaves no results directory is a harness error, not an
+invalid run (owner, DETENTE 3.3.g: the first WARNING runs crashed before measuring and were counted as invalid).
+Every decision goes to
+bench/results/series-<start>.jsonl (JSON lines; .gitignore ignores *.log) and into the block's commit.
+
+    python -m bench.series run --only-sensitivity    the sensitivity block alone (DETENTE 3.3.g)
 """
 
 from __future__ import annotations
@@ -36,11 +40,11 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from bench import criteria
+from bench.criteria import INSTRUMENT_REASONS
 
 SERIES_COOLDOWN_S = 120
 SENSITIVITY_COMPARISON = 2000.0  # owner, DETENTE 3.3.i
 SENSITIVITY_DIAGNOSTIC = 3000.0
-INSTRUMENT_REASONS = ("CPU-bound instrument(s)", "generator saturated")
 
 
 class Stop(Exception):
@@ -116,6 +120,8 @@ class Series:
                  run_id=outcome.manifest.get("run_id"))
         if outcome.exit_code not in (0, 1):
             raise Stop(f"harness exit {outcome.exit_code} at {point.label()}")
+        if not outcome.manifest:
+            raise Stop(f"harness error at {point.label()}: no results directory (exit {outcome.exit_code})")
         return outcome
 
     def measure(self, point: Point, tools_limit_ends: bool = False) -> Outcome:
@@ -204,9 +210,13 @@ class Series:
         self.note(f"sensitivity diagnostic at {SENSITIVITY_DIAGNOSTIC:g}/s (never publishable): "
                   f"{'valid' if diagnostic.valid else 'invalid: ' + '; '.join(diagnostic.problems)}")
 
-    def run_all(self) -> str:
-        """Every block; returns how the series ended."""
+    def run_all(self, only_sensitivity: bool = False) -> str:
+        """Every block (or the sensitivity block alone); returns how the series ended."""
         try:
+            if only_sensitivity:
+                self.block("sensitivity", self.sensitivity_block)
+                self.log("done")
+                return "DONE"
             self.block("latency", self.latency_block)
             result: list = []
             self.block("ladder", lambda: result.extend(self.ladder_block()))
@@ -245,11 +255,12 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - orchestrat
     p = argparse.ArgumentParser(prog="python -m bench.series")
     p.add_argument("command", choices=["run"])
     p.add_argument("--dry-run", action="store_true", help="print the configuration and the first point, run nothing")
+    p.add_argument("--only-sensitivity", action="store_true", help="the sensitivity block alone")
     args = p.parse_args(argv)
     bench = load_benchmark_config()
     results = REPO_ROOT / "bench" / "results"
     started = datetime.now(timezone.utc)
-    log_path = results / f"series-{started.strftime('%Y%m%dT%H%M%SZ')}.log"
+    log_path = results / f"series-{started.strftime('%Y%m%dT%H%M%SZ')}.jsonl"
     cap, _ = report.calibration([report.load_run(d) for d in sorted(results.iterdir()) if (d / "manifest.json").is_file()],
                                 bench.max_client_core_fraction,
                                 criteria.Thresholds(bench.criteria_p99_ms, bench.criteria_max_lag_s,
@@ -294,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - orchestrat
         new = sorted(d for d in results.iterdir() if d.name not in before and (d / "manifest.json").is_file())
         manifest = json.loads((new[-1] / "manifest.json").read_text(encoding="utf-8")) if new else {}
         if not new:
-            log("no_run_directory", point=point.label(), stderr=done.stderr[-2000:])
+            log("no_run_directory", point=point.label(), stderr=done.stderr[-4000:])
         return Outcome(point, done.returncode, manifest)
 
     def commit(block: str, outcomes: list[Outcome], notes: list[str]) -> None:
@@ -313,12 +324,12 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - orchestrat
 
     series = Series(bench.latency_rates_per_s, bench.latency_repetitions, ladder, bench.repetitions_at_candidate,
                     run, environment, commit, log)
-    log("series_start", ladder=list(ladder), latency=list(bench.latency_rates_per_s),
+    log("series_start", only_sensitivity=args.only_sensitivity, ladder=list(ladder), latency=list(bench.latency_rates_per_s),
         repetitions=bench.latency_repetitions, repetitions_at_candidate=bench.repetitions_at_candidate,
         commit=git("rev-parse", "--short", "HEAD").stdout.strip(), environment=environment())
     if args.dry_run:
         return 0
-    ended = series.run_all()
+    ended = series.run_all(args.only_sensitivity)
     log("series_end", result=ended)
     # The series log itself, with the last block's results already committed.
     git("add", str(log_path.relative_to(REPO_ROOT)))

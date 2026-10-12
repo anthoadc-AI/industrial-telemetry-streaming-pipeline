@@ -176,3 +176,27 @@ def test_commit_message():
 ])
 def test_point_labels(point, label):
     assert point.label() == label
+
+
+def test_a_run_without_results_is_a_harness_error_not_an_invalid_run():
+    """Owner, DETENTE 3.3.g: the first WARNING runs crashed before measuring (exit 1, no results directory)."""
+    s = Script(t2000s=[(1, {})])  # the harness crashed: exit 1
+    sr = s.series()
+
+    def run(point):  # the scripted manifest always gains run_id and harness_revision: drop them, as a crash would
+        outcome = Script.run(s, point)
+        if point.sensitivity:
+            outcome.manifest = {}
+        return outcome
+
+    sr.run = run
+    assert sr.run_all(only_sensitivity=True) == "STOPPED: harness error at throughput sensitivity 2000/s r1: no results " \
+        "directory (exit 1)"
+    assert s.ran == ["throughput sensitivity 2000/s r1"]
+
+
+def test_the_sensitivity_block_alone():
+    s = Script(t3000sd=[TOOLS])
+    assert s.series().run_all(only_sensitivity=True) == "DONE"
+    assert s.ran == ["throughput sensitivity 2000/s r1", "throughput sensitivity diagnostic 3000/s r1"]
+    assert [(b, n) for b, n, _ in s.commits] == [("sensitivity", 2)]

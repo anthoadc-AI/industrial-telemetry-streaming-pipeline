@@ -305,3 +305,31 @@ def latest_revision(revisions) -> str:
         order.append(HARNESS_REVISIONS.index(revision or ""))
     return HARNESS_REVISIONS[max(order)] if order else ""
 
+
+# --- the bridge's subscription, from Mosquitto (owner, DETENTE 3.3.g) ---------------------------------------------
+#
+# The harness waited for the bridge's mqtt_subscribed log line, which a bridge at WARNING never writes. It reads
+# Mosquitto's subscription count instead: retained (its value arrives on subscribing) and published again, every
+# sys_interval, only when it changes (measured on 2.1.2, DETENTE 3.3.i).
+
+SYS_SUBSCRIPTIONS = "$SYS/broker/subscriptions/count"
+
+
+def bridge_subscriptions(drop_monitor_enabled: bool) -> int:
+    """Subscriptions a started bridge holds: the telemetry one, and the drop monitor's two ($SYS dropped, uptime),
+    which it makes first."""
+    return 1 + (2 if drop_monitor_enabled else 0)
+
+
+def subscription_baseline(retained: float | None, updates: list[float]) -> float | None:
+    """The count before the bridge, with the watcher's own subscription. The retained value predates that
+    subscription (+1); a published update includes it. The lowest wins: a short-lived subscriber, such as
+    Mosquitto's healthcheck, can only inflate a value."""
+    candidates = ([retained + 1] if retained is not None else []) + list(updates)
+    return min(candidates) if candidates else None
+
+
+def bridge_subscribed(values: list[float], baseline: float, expected: int) -> bool:
+    """A count published after the bridge started reaches the baseline plus the bridge's subscriptions."""
+    return any(v >= baseline + expected for v in values)
+

@@ -528,3 +528,56 @@ def test_only_the_final_configuration_feeds_the_published_tables(tmp_path):
     assert report.final_configuration_note([r for r in runs if r["dir"].startswith("a-")]) == []  # none on it yet
     assert "Earlier runs, kept as history in the Runs table and not in the tables below: none." in "\n".join(
         report.final_configuration_note([r for r in runs if r["dir"].startswith("b-")]))
+
+
+def test_the_bridge_subscription_from_mosquittos_count():
+    """Owner, DETENTE 3.3.g: the harness waits on Mosquitto's subscription count, not on an INFO log line."""
+    assert analysis.bridge_subscriptions(True) == 3 and analysis.bridge_subscriptions(False) == 1
+    assert analysis.subscription_baseline(0, [1]) == 1  # the retained value predates the watcher's subscription
+    assert analysis.subscription_baseline(0, [2]) == 1  # a short-lived subscriber inflated the update
+    assert analysis.subscription_baseline(None, [1, 2]) == 1
+    assert analysis.subscription_baseline(4, []) == 5
+    assert analysis.subscription_baseline(None, []) is None
+    assert not analysis.bridge_subscribed([2, 3], 1, 3)  # the drop monitor's two, not yet the telemetry one
+    assert analysis.bridge_subscribed([2, 4], 1, 3)
+    assert not analysis.bridge_subscribed([], 1, 1)
+
+
+def test_instrument_only_reasons():
+    assert criteria.instrument_only(["CPU-bound instrument(s): generator at 102 % of a core",
+                                     "generator saturated (lateness p99 2.0 ms, max 272 ms)"])
+    assert not criteria.instrument_only(["CPU-bound instrument(s): generator at 91 % of a core",
+                                         "meter saw 1 distinct of 2 sent, 1 gap(s)"])
+    assert not criteria.instrument_only([])
+
+
+def test_e2_replaces_an_attempt_invalid_only_because_of_the_instrument(tmp_path):
+    """Owner, DETENTE 3.3.g: r3 invalid with the generator at its limit and nothing lost is replaced by its valid
+    repeat; every attempt is still listed, the replaced one with its bridge CPU and Mosquitto's drops. An attempt
+    with a loss is not replaced (r2 of block 4)."""
+    final = "final configuration (after 3.3.h and 3.3.i)"
+    runs_spec = [("a-1000", 1000, 1, None), ("b-2000-r1", 2000, 1, None), ("c-2000-r2", 2000, 2, None),
+                 ("d-2000-r3", 2000, 3, ["CPU-bound instrument(s): generator at 102 % of a core"]),
+                 ("e-2000-r3", 2000, 3, None), ("f-2000-r4", 2000, 4, None), ("g-2000-r5", 2000, 5, None)]
+    for name, rate, rep, problems in runs_spec:
+        write_run(tmp_path, name, "throughput", rate, 40.0, repetition=rep, problems=problems)
+        m = json.loads((tmp_path / name / "manifest.json").read_text(encoding="utf-8"))
+        m.update(harness_revision=final, environment={"git": {"commit": "abc1234", "dirty": False}},
+                 mosquitto={"dropped_total": 0, "dropped_during_run": 0})
+        m.setdefault("cpu_peak_percent", {})["bridge"] = 105.2
+        (tmp_path / name / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 2000.0), 0.8, 5)
+    assert "Candidate: 2000/s; runs 5 of the 5 E2 needs; confirmed." in text
+    assert "E2 attempts (6, all listed;" in text
+    assert ("- d-2000-r3 (r3): invalid because of the instrument (CPU-bound instrument(s): generator at 102 % of a core); "
+            "replaced by its repeat e-2000-r3; bridge CPU peak 105 % of a core, Mosquitto dropped 0") in text
+    assert "- e-2000-r3 (r3): valid, sustainable" in text
+    # The same attempt with a loss among its reasons counts, and E2 fails.
+    m = json.loads((tmp_path / "d-2000-r3" / "manifest.json").read_text(encoding="utf-8"))
+    m["run_problems"] = ["meter saw 1 distinct of 2 sent, 1 gap(s)", "CPU-bound instrument(s): generator at 91 % of a core"]
+    (tmp_path / "d-2000-r3" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 2000.0), 0.8, 5)
+    assert "Candidate: 2000/s; runs 6 of the 5 E2 needs; not yet confirmed (E2)." in text
+    assert "- d-2000-r3 (r3): invalid (meter saw 1 distinct of 2 sent, 1 gap(s);" in text

@@ -201,6 +201,36 @@ def final_configuration_note(pipeline: list[dict]) -> list[str]:
             "", f"Earlier runs, kept as history in the Runs table and not in the tables below: {listed}."]
 
 
+def e2_attempts(attempts: list[dict], max_core_fraction: float, t: criteria.Thresholds) -> tuple[list[dict], list[str]]:
+    """The runs E2 counts at the candidate, and every attempt listed.
+
+    An attempt invalid only because an instrument was at its limit (nothing lost, no Mosquitto drop) is replaced by
+    a later valid run with the same repetition number, its repeat (owner, DETENTE 3.3.g: r3 of the final series,
+    the generator stalled 272 ms, which the scheduled-time latency counts as pipeline latency). Any other invalid
+    attempt counts, and fails E2 (as r2 of block 4 did, with 785 messages lost)."""
+    ordered = sorted(attempts, key=lambda r: r["dir"])
+    verdicts = {r["dir"]: criteria.evaluate(run_input(r, max_core_fraction), t) for r in ordered}
+    counted, lines = [], []
+    for i, r in enumerate(ordered):
+        m, v = r["manifest"], verdicts[r["dir"]]
+        repeat = next((x for x in ordered[i + 1:] if x["manifest"]["repetition"] == m["repetition"]
+                       and verdicts[x["dir"]].valid), None)
+        if not v.valid and criteria.instrument_only(v.reasons) and repeat is not None:
+            bridge = (m.get("cpu_peak_percent") or {}).get("bridge")
+            dropped = (m.get("mosquitto") or {}).get("dropped_during_run", (m.get("mosquitto") or {}).get("dropped_total"))
+            lines.append(f"- {r['dir']} (r{m['repetition']}): invalid because of the instrument ({'; '.join(v.reasons)}); "
+                         f"replaced by its repeat {repeat['dir']}; bridge CPU peak "
+                         f"{'-' if bridge is None else f'{bridge:.0f} %'} of a core, Mosquitto dropped "
+                         f"{'-' if dropped is None else f'{dropped:g}'}")
+            continue
+        counted.append(r)
+        state = ("valid, " + ("sustainable" if v.sustainable else "not sustainable") if v.valid else "invalid")
+        lines.append(f"- {r['dir']} (r{m['repetition']}): {state}" + (f" ({'; '.join(v.reasons)})" if v.reasons else ""))
+    header = (f"E2 attempts ({len(ordered)}, all listed; an attempt invalid only because an instrument was at its limit is "
+              "replaced by its valid repeat, owner DETENTE 3.3.g):")
+    return counted, ["", header] + lines
+
+
 def environment_problems(m: dict) -> list[str]:
     """A calibration run's environment problems. Manifests written before DETENTE 3.3.e have no such field: their
     run_problems held the environment problems plus the generator's acknowledgement check ("sent N of M,
@@ -341,11 +371,14 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     # labelled and not mixed with those made after it (briefing, STEP 2).
     at_candidate = [r for r in headline if r["manifest"]["rate_per_s"] == result.max_sustainable_rate]
     latest = analysis.latest_revision(r["manifest"].get("harness_revision") for r in at_candidate)
-    reps = [run_input(r, max_core_fraction) for r in at_candidate if (r["manifest"].get("harness_revision") or "") == latest]
+    attempts = [r for r in at_candidate if (r["manifest"].get("harness_revision") or "") == latest]
+    counted, attempt_lines = e2_attempts(attempts, max_core_fraction, t)
+    reps = [run_input(r, max_core_fraction) for r in counted]
     ok, _ = criteria.confirmed(reps, t)
     # E2 (amendment E2, config throughput.repetitions_at_candidate): that many runs, every one valid and sustainable.
     lines.append(f"\nCandidate: {result.max_sustainable_rate:g}/s; runs {len(reps)} of the {repetitions_at_candidate} E2 "
                  f"needs; {'confirmed' if ok and len(reps) >= repetitions_at_candidate else 'not yet confirmed (E2)'}.")
+    lines += attempt_lines
     if result.limited_by_generator:
         lines.append(f"Limited by the measuring tools: the step above the candidate, {result.first_failure[0]:g}/s, could "
                      "not be measured validly (an instrument at its limit); the ladder ends there, with no intermediate "
