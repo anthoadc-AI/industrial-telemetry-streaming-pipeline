@@ -1,0 +1,8 @@
+{"ts": "2026-10-12T19:20:39+00:00", "event": "series_start", "only_sensitivity": true, "ladder": [250.0, 500.0, 1000.0, 2000.0, 3000.0], "latency": [5.0, 50.0], "repetitions": 5, "repetitions_at_candidate": 5, "commit": "8d5abfc", "environment": []}
+{"ts": "2026-10-12T19:20:39+00:00", "event": "cooldown", "seconds": 120, "next": "throughput sensitivity 2000/s r1"}
+{"ts": "2026-10-12T19:22:39+00:00", "event": "start", "point": "throughput sensitivity 2000/s r1", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 1 --sensitivity"}
+{"ts": "2026-10-12T19:29:27+00:00", "event": "run", "point": "throughput sensitivity 2000/s r1", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T192239Z-throughput-warning-2000-r1"}
+{"ts": "2026-10-12T19:29:27+00:00", "event": "cooldown", "seconds": 120, "next": "throughput sensitivity diagnostic 3000/s r1"}
+{"ts": "2026-10-12T19:31:27+00:00", "event": "start", "point": "throughput sensitivity diagnostic 3000/s r1", "cmd": "-m bench.harness run --mode throughput --rate 3000 --repetition 1 --sensitivity --diagnostic --full-window"}
+{"ts": "2026-10-12T19:38:06+00:00", "event": "run", "point": "throughput sensitivity diagnostic 3000/s r1", "exit_code": 1, "valid": false, "sustainable": false, "problems": ["CPU-bound instrument(s): generator at 93 % of a core"], "run_id": "20261012T193127Z-throughput-diagnostic-warning-3000-r1"}
+{"ts": "2026-10-12T19:38:06+00:00", "event": "decision", "text": "sensitivity diagnostic at 3000/s (never publishable): invalid: CPU-bound instrument(s): generator at 93 % of a core"}
