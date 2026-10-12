@@ -42,7 +42,7 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "full: needs the full profile (ThingsBoard)")
+    config.addinivalue_line("markers", "full: runs only with the full profile (it needs ThingsBoard, or is too long for the core job)")
     config.stack_report = {}
 
 

@@ -24,6 +24,8 @@ run. Each stage must reach N/N:
 - bridge: exit 0, received = produced = delivered = N, invalid 0, failed 0;
 - Kafka: avro_consume.py exit 0, which means exactly N records, all decoded,
   keyed by asset_id, synthetic, seq contiguous per asset;
+- Mosquitto: its dropped counter ($SYS, broker-wide) unchanged over the run,
+  read after its next update, and no mqtt_messages_dropped from the bridge;
 - logs: no non-JSON line on the stderr of the simulator or the bridge.
 
 Exit status: 0 when every check passes, 1 otherwise.
@@ -42,6 +44,7 @@ import sys
 import time
 from pathlib import Path
 
+import mosquitto_dropped
 from confluent_kafka import Consumer, TopicPartition
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -141,6 +144,7 @@ def run(count: int, log_dir: Path) -> list[tuple[str, str, bool]]:
     """Run the pipeline once; return (stage, measured, passed) rows."""
     n = str(count)
     procs: list[Proc] = []
+    dropped_before = mosquitto_dropped.dropped_total()
     try:
         bridge = Proc("bridge", [PY, "-m", "bridge.mqtt_to_kafka", "--count", n, "--duration", DURATION], log_dir)
         procs.append(bridge)
@@ -183,6 +187,13 @@ def run(count: int, log_dir: Path) -> list[tuple[str, str, bool]]:
     decoded = int(match.group(1)) if match else None
     rows.append(("Kafka records decoded and checked", f"{decoded} / {count}, exit {kafka.returncode}",
                  kafka.returncode == 0 and decoded == count))
+
+    # Mosquitto's dropped counter (DETENTE 3.3.h), broker-wide, after its next $SYS update (up to 10 s), and the
+    # bridge's own record of it.
+    dropped = mosquitto_dropped.dropped_total(after=time.monotonic()) - dropped_before
+    logged = sum(e.get("delta", 0) for e in bridge.events("mqtt_messages_dropped"))
+    rows.append(("Mosquitto dropped (broker-wide) / bridge mqtt_messages_dropped", f"{dropped} / {logged}",
+                 dropped == 0 and logged == 0))
 
     bad = (simulator.non_json_lines(), bridge.non_json_lines())
     rows.append(("non-JSON stderr lines (simulator, bridge)", f"{bad[0]}, {bad[1]}", bad == (0, 0)))

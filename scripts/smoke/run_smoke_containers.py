@@ -23,6 +23,8 @@ Each check must pass:
 - alarms: at least one pump-01 alarm on telemetry.alarms, from the injected
   imbalance (read from the record keys, alarm_id = asset/channel/severity/ts);
 - dead letters: none on telemetry.dlq;
+- Mosquitto: its dropped counter ($SYS, broker-wide) unchanged over the run,
+  read after its next update, and no mqtt_messages_dropped from the bridge;
 - logs: no non-JSON line from the simulator, the bridge or the consumer.
 
 Container output goes to --log-dir, replaced on every run. Exit status: 0
@@ -41,6 +43,7 @@ import sys
 import time
 from pathlib import Path
 
+import mosquitto_dropped
 from confluent_kafka import Consumer, TopicPartition
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -158,6 +161,7 @@ def run(count: int, log_dir: Path, topics) -> list[tuple[str, str, bool]]:
     rows = []
     wait_ready()
     rows.append(("containers running and ready (bridge, alarm-consumer)", "yes", True))
+    dropped_before = mosquitto_dropped.dropped_total()
 
     sim = compose("--profile", "simulator", "run", "--rm", "-T", "--no-deps", "simulator",
                   "--count", n, "--seed", "42", "--fault", "pump-01:imbalance:20", timeout=300)
@@ -202,6 +206,13 @@ def run(count: int, log_dir: Path, topics) -> list[tuple[str, str, bool]]:
 
     dlq = sum(end_offsets(topics.kafka["telemetry_dlq"].name).values())
     rows.append(("dead letters on telemetry.dlq", str(dlq), dlq == 0))
+
+    # Mosquitto's dropped counter (DETENTE 3.3.h), broker-wide, after its next $SYS update (up to 10 s), and the
+    # bridge's own record of it.
+    dropped = mosquitto_dropped.dropped_total(after=time.monotonic()) - dropped_before
+    logged = sum(e.get("delta", 0) for e in events(bridge_text, "mqtt_messages_dropped"))
+    rows.append(("Mosquitto dropped (broker-wide) / bridge mqtt_messages_dropped", f"{dropped} / {logged}",
+                 dropped == 0 and logged == 0))
 
     consumer_text = container_log("alarm-consumer")
     (log_dir / "alarm-consumer.log").write_text(consumer_text, encoding="utf-8")
