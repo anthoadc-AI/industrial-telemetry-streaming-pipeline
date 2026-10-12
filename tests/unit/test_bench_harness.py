@@ -581,3 +581,25 @@ def test_e2_replaces_an_attempt_invalid_only_because_of_the_instrument(tmp_path)
     text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 2000.0), 0.8, 5)
     assert "Candidate: 2000/s; runs 6 of the 5 E2 needs; not yet confirmed (E2)." in text
     assert "- d-2000-r3 (r3): invalid (meter saw 1 distinct of 2 sent, 1 gap(s);" in text
+
+
+def test_the_sensitivity_table_uses_the_runs_e2_counts(tmp_path):
+    """Owner, DETENTE 3.3.g: the INFO side is the E2-counted runs (a replaced attempt left out), and a single run on
+    the WARNING side is stated next to the table."""
+    final = "final configuration (after 3.3.h and 3.3.i)"
+    spec = [("a-1000", 1000, 1, None, False, 40.0), ("b-2000-r1", 2000, 1, None, False, 40.0),
+            ("c-2000-r2", 2000, 2, ["CPU-bound instrument(s): generator at 102 % of a core"], False, 900.0),
+            ("d-2000-r2", 2000, 2, None, False, 40.0), ("e-2000-warning", 2000, 1, None, True, 20.0)]
+    for name, rate, rep, problems, sensitivity, latency in spec:
+        write_run(tmp_path, name, "throughput", rate, latency, repetition=rep, problems=problems, sensitivity=sensitivity)
+        m = json.loads((tmp_path / name / "manifest.json").read_text(encoding="utf-8"))
+        m.update(harness_revision=final, environment={"git": {"commit": "abc1234", "dirty": False}})
+        (tmp_path / name / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 2000.0), 0.8, 2)
+    assert "| 2000 | INFO | 2 | 2 of 2 | 40 / 40 / - (n=400) |" in text  # not 3, and no 900 ms run in it
+    assert "| 2000 | WARNING | 1 | 1 of 1 | 20 / 20 / - (n=200) |" in text
+    assert "The WARNING side at 2000/s is a single run." in text
+    assert "The INFO side at 2000/s is a single run." not in text
+    assert "uses the runs E2 counts at that step (an attempt replaced by its repeat is left out" in text
+

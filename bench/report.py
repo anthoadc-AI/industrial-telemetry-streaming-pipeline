@@ -389,17 +389,25 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     if sensitivity:
         lines += ["", "## Log-level sensitivity (same steps, bridge at the sensitivity log level)", "",
                   "| Rate/s | Log level | Runs | Sustainable | F1 e2e p50/p95/p99 ms |", "|---|---|---|---|---|"]
+        notes = ["", "The product-default side of each row uses the runs E2 counts at that step (an attempt replaced by its "
+                 "repeat is left out, as in E2; owner, DETENTE 3.3.g)."]
         for rate in sorted({r["manifest"]["rate_per_s"] for r in sensitivity}):
-            for group in ([r for r in headline if r["manifest"]["rate_per_s"] == rate],
-                          [r for r in sensitivity if r["manifest"]["rate_per_s"] == rate]):
+            at_rate = [r for r in headline if r["manifest"]["rate_per_s"] == rate]
+            latest = analysis.latest_revision(r["manifest"].get("harness_revision") for r in at_rate)
+            default, _ = e2_attempts([r for r in at_rate if (r["manifest"].get("harness_revision") or "") == latest],
+                                     max_core_fraction, t)
+            for group in (default, [r for r in sensitivity if r["manifest"]["rate_per_s"] == rate]):
                 if not group:
                     continue
                 merged = Histogram()
                 for r in group:
                     merged = merged.merge(r["hists"]["e2e"])
                 passed = sum(criteria.evaluate(run_input(r, max_core_fraction), t).sustainable for r in group)
-                lines.append(f"| {rate:g} | {group[0]['manifest'].get('bridge_log_level', '-')} | {len(group)} | "
-                             f"{passed} of {len(group)} | {triple(merged)} |")
+                level = group[0]["manifest"].get("bridge_log_level", "-")
+                lines.append(f"| {rate:g} | {level} | {len(group)} | {passed} of {len(group)} | {triple(merged)} |")
+                if len(group) == 1:
+                    notes.append(f"The {level} side at {rate:g}/s is a single run.")
+        lines += notes
     return "\n".join(lines) + "\n"
 
 
