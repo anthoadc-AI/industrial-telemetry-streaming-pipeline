@@ -23,6 +23,9 @@ include = [
     "scripts/clean.py",
     "scripts/thingsboard/*.py",
     "processing/thingsboard_sink/*.py",
+    # The benchmark (Phase 3, Task 3.3): its generator planning, percentiles and
+    # throughput criterion are unit-tested within these thresholds (briefing 1.3.5).
+    "bench/*.py",
 ]
 
 [tool.coverage.report]

@@ -1,0 +1,260 @@
+{
+ "run_id": "20261011T233023Z-throughput-diagnostic-3000-r1",
+ "harness_revision": "after the 3.3.f harness change",
+ "mode": "throughput",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 3000.0,
+ "repetition": 1,
+ "assets": 100,
+ "clones_per_asset": 20,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T23:30:23.442192+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 5.22,
+  "git": {
+   "commit": "141a25989119ad344ed453d0d3d3cc5e527a010d",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 4.04,
+ "cpu_peak_percent": {
+  "generator": 83.78,
+  "meter": 29.43,
+  "bridge": 105.6,
+  "alarm-consumer": 38.12,
+  "schema-registry": 13.96,
+  "broker": 204.89,
+  "mosquitto": 17.45,
+  "zookeeper": 83.96
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "e2e": {
+   "n": 90000,
+   "p50": 11.0,
+   "p95": 119.0,
+   "p99": 159.0,
+   "min": -0.3095703125,
+   "max": 178.599853515625,
+   "underflow": 1
+  },
+  "ingest": {
+   "n": 90000,
+   "p50": 4.1,
+   "p95": 114.0,
+   "p99": 153.0,
+   "min": -3,
+   "max": 171,
+   "underflow": 5
+  },
+  "produce_to_visible": {
+   "n": 90000,
+   "p50": 5.8,
+   "p95": 9.8,
+   "p99": 16.0,
+   "min": -0.84716796875,
+   "max": 46.67578125,
+   "underflow": 1
+  },
+  "alarm_e2e": {
+   "n": 600,
+   "p50": 19.0,
+   "p95": 125.0,
+   "p99": null,
+   "min": 5.55,
+   "max": 173.376,
+   "underflow": 0
+  },
+  "generator_late": {
+   "n": 180000,
+   "p50": 0.1,
+   "p95": 0.2,
+   "p99": 0.6,
+   "min": 0.0002384185791015625,
+   "max": 9.733438491821289,
+   "underflow": 0
+  },
+  "produce_to_ack": {
+   "n": 89996,
+   "p50": 6.4,
+   "p95": 29.0,
+   "p99": 50.0,
+   "min": 0.513,
+   "max": 85.345,
+   "underflow": 0
+  }
+ },
+ "publishable": false,
+ "warmup_s": 30.0,
+ "measured_s": 30.0,
+ "t0_ms": 1791761464638,
+ "window": {
+  "start_ms": 1791761494638,
+  "end_ms": 1791761524638
+ },
+ "finished": "2026-10-11T23:32:11.103344+00:00",
+ "fetch_wait_max_ms": 5,
+ "lag_peak_s": 0.12533333333333332,
+ "lag_slope_s_per_s": 0.00020085405412556176,
+ "valid": false,
+ "sustainable": false,
+ "generator_saturated": false,
+ "problems": [
+  "CPU-bound instrument(s): generator at 84 % of a core"
+ ],
+ "thresholds": {
+  "p99_ms": 1000.0,
+  "max_lag_s": 1.0,
+  "max_lag_slope_per_s": 0.001,
+  "max_lost": 0,
+  "max_late_p99_ms": 5.0,
+  "max_late_max_ms": 100.0
+ },
+ "clock": {
+  "samples": 727,
+  "largest_backward_step_ms": 3.935,
+  "backward_steps": 3,
+  "forward_steps": 0,
+  "total_drift_ms": -10.574,
+  "negative_samples": 7,
+  "negatives_after_a_backward_step": 7,
+  "expected_by_chance": 0.06,
+  "window_ms": 100.0
+ },
+ "negatives": [
+  [
+   1791761495393.153,
+   "produce_to_visible",
+   -0.847
+  ],
+  [
+   1791761495393.211,
+   "ingest",
+   -2
+  ],
+  [
+   1791761495393.269,
+   "ingest",
+   -2
+  ],
+  [
+   1791761495393.638,
+   "ingest",
+   -3
+  ],
+  [
+   1791761495393.69,
+   "e2e",
+   -0.31
+  ],
+  [
+   1791761495393.69,
+   "ingest",
+   -3
+  ],
+  [
+   1791761495394.031,
+   "ingest",
+   -2
+  ]
+ ],
+ "diagnostic": true,
+ "mosquitto": {
+  "updates": 8,
+  "dropped_total": 0.0,
+  "stored_max": 134.0,
+  "first_update_with_drops_s": null,
+  "intervals": [
+   {
+    "wall_s": 1791761460,
+    "stored": 55.0,
+    "received_delta": null,
+    "sent_delta": null,
+    "dropped_delta": null
+   },
+   {
+    "wall_s": 1791761470,
+    "stored": 67.0,
+    "received_delta": 32167.0,
+    "sent_delta": 32220.0,
+    "dropped_delta": 0.0
+   },
+   {
+    "wall_s": 1791761480,
+    "stored": 68.0,
+    "received_delta": 60000.0,
+    "sent_delta": 60040.0,
+    "dropped_delta": 0.0
+   },
+   {
+    "wall_s": 1791761490,
+    "stored": 59.0,
+    "received_delta": 60014.0,
+    "sent_delta": 60043.0,
+    "dropped_delta": 0.0
+   },
+   {
+    "wall_s": 1791761500,
+    "stored": 134.0,
+    "received_delta": 59928.0,
+    "sent_delta": 59983.0,
+    "dropped_delta": 0.0
+   },
+   {
+    "wall_s": 1791761510,
+    "stored": 91.0,
+    "received_delta": 60044.0,
+    "sent_delta": 60083.0,
+    "dropped_delta": 0.0
+   },
+   {
+    "wall_s": 1791761520,
+    "stored": 80.0,
+    "received_delta": 60017.0,
+    "sent_delta": 60055.0,
+    "dropped_delta": 0.0
+   },
+   {
+    "wall_s": 1791761530,
+    "stored": 56.0,
+    "received_delta": 27856.0,
+    "sent_delta": 27877.0,
+    "dropped_delta": 0.0
+   }
+  ],
+  "drop_notices": [],
+  "missing_from_telemetry_raw": 0
+ },
+ "run_problems": [
+  "CPU-bound instrument(s): generator at 84 % of a core"
+ ]
+}

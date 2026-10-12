@@ -1,0 +1,2 @@
+# librdkafka's full statistics (about 20 MB); reduce_stats.py keeps what analyze.py uses in *.stats.csv
+*.stats.jsonl

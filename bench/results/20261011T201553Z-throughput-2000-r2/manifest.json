@@ -1,0 +1,614 @@
+{
+ "run_id": "20261011T201553Z-throughput-2000-r2",
+ "harness_revision": "after the 3.3.f harness change",
+ "mode": "throughput",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 2000.0,
+ "repetition": 2,
+ "assets": 100,
+ "clones_per_asset": 20,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T20:15:53.844231+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 5.89,
+  "git": {
+   "commit": "3d24ec305b3c66a7d62bcf23209d8f8914d5a664",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 4.54,
+ "cpu_peak_percent": {
+  "generator": 74.82,
+  "meter": 31.51,
+  "bridge": 98.41,
+  "alarm-consumer": 37.97,
+  "schema-registry": 21.19,
+  "broker": 204.28,
+  "mosquitto": 18.32,
+  "zookeeper": 93.99
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "e2e": {
+   "n": 600000,
+   "p50": 5.8,
+   "p95": 14.0,
+   "p99": 33.0,
+   "min": -3.574951171875,
+   "max": 86.02587890625,
+   "underflow": 30
+  },
+  "ingest": {
+   "n": 600000,
+   "p50": 1.1,
+   "p95": 5.1,
+   "p99": 25.0,
+   "min": -5,
+   "max": 78,
+   "underflow": 29
+  },
+  "produce_to_visible": {
+   "n": 600000,
+   "p50": 4.9,
+   "p95": 7.9,
+   "p99": 13.0,
+   "min": -2.705810546875,
+   "max": 59.76904296875,
+   "underflow": 33
+  },
+  "alarm_e2e": {
+   "n": 6000,
+   "p50": 38.0,
+   "p95": 60.0,
+   "p99": null,
+   "min": 10.495,
+   "max": 130.1,
+   "underflow": 0
+  },
+  "generator_late": {
+   "n": 660000,
+   "p50": 0.1,
+   "p95": 0.2,
+   "p99": 0.7,
+   "min": 0.0,
+   "max": 13.026714324951172,
+   "underflow": 0
+  },
+  "produce_to_ack": {
+   "n": 599999,
+   "p50": 4.7,
+   "p95": 9.5,
+   "p99": 21.0,
+   "min": 0.357,
+   "max": 71.985,
+   "underflow": 0
+  }
+ },
+ "publishable": true,
+ "warmup_s": 30.0,
+ "measured_s": 300.0,
+ "t0_ms": 1791749795154,
+ "window": {
+  "start_ms": 1791749825154,
+  "end_ms": 1791750125154
+ },
+ "finished": "2026-10-11T20:22:10.821418+00:00",
+ "fetch_wait_max_ms": 5,
+ "lag_peak_s": 0.1255,
+ "lag_slope_s_per_s": 5.3667154851937716e-05,
+ "valid": true,
+ "sustainable": true,
+ "generator_saturated": false,
+ "problems": [],
+ "thresholds": {
+  "p99_ms": 1000.0,
+  "max_lag_s": 1.0,
+  "max_lag_slope_per_s": 0.001,
+  "max_lost": 0,
+  "max_late_p99_ms": 5.0,
+  "max_late_max_ms": 100.0
+ },
+ "clock": {
+  "samples": 3413,
+  "largest_backward_step_ms": 6.08,
+  "backward_steps": 12,
+  "forward_steps": 0,
+  "total_drift_ms": -55.181,
+  "negative_samples": 92,
+  "negatives_after_a_backward_step": 87,
+  "expected_by_chance": 0.63,
+  "window_ms": 100.0
+ },
+ "negatives": [
+  [
+   1791749854457.389,
+   "e2e",
+   -0.611
+  ],
+  [
+   1791749854457.389,
+   "produce_to_visible",
+   -0.611
+  ],
+  [
+   1791749854459.596,
+   "ingest",
+   -5
+  ],
+  [
+   1791749854460.566,
+   "ingest",
+   -4
+  ],
+  [
+   1791749884453.459,
+   "e2e",
+   -0.541
+  ],
+  [
+   1791749884453.459,
+   "produce_to_visible",
+   -1.541
+  ],
+  [
+   1791749884454.286,
+   "produce_to_visible",
+   -0.714
+  ],
+  [
+   1791749884454.356,
+   "e2e",
+   -0.644
+  ],
+  [
+   1791749884454.356,
+   "produce_to_visible",
+   -0.644
+  ],
+  [
+   1791749884454.425,
+   "e2e",
+   -3.575
+  ],
+  [
+   1791749884454.425,
+   "ingest",
+   -5
+  ],
+  [
+   1791749884455.717,
+   "produce_to_visible",
+   -0.283
+  ],
+  [
+   1791749884455.78,
+   "e2e",
+   -0.22
+  ],
+  [
+   1791749884455.78,
+   "produce_to_visible",
+   -0.22
+  ],
+  [
+   1791749884455.839,
+   "e2e",
+   -0.161
+  ],
+  [
+   1791749884455.839,
+   "produce_to_visible",
+   -1.161
+  ],
+  [
+   1791749884455.896,
+   "e2e",
+   -1.104
+  ],
+  [
+   1791749884455.896,
+   "produce_to_visible",
+   -1.104
+  ],
+  [
+   1791749884458.94,
+   "ingest",
+   -4
+  ],
+  [
+   1791749914454.255,
+   "e2e",
+   -0.745
+  ],
+  [
+   1791749914454.255,
+   "produce_to_visible",
+   -1.745
+  ],
+  [
+   1791749914454.32,
+   "e2e",
+   -1.68
+  ],
+  [
+   1791749914454.32,
+   "produce_to_visible",
+   -2.68
+  ],
+  [
+   1791749914454.405,
+   "e2e",
+   -1.595
+  ],
+  [
+   1791749914454.405,
+   "produce_to_visible",
+   -2.595
+  ],
+  [
+   1791749914457.795,
+   "e2e",
+   -0.205
+  ],
+  [
+   1791749914457.795,
+   "ingest",
+   -4
+  ],
+  [
+   1791749914459.922,
+   "ingest",
+   -4
+  ],
+  [
+   1791749914460.203,
+   "ingest",
+   -4
+  ],
+  [
+   1791749944454.775,
+   "produce_to_visible",
+   -0.225
+  ],
+  [
+   1791749944454.854,
+   "e2e",
+   -0.146
+  ],
+  [
+   1791749944454.854,
+   "produce_to_visible",
+   -0.146
+  ],
+  [
+   1791749944456.839,
+   "produce_to_visible",
+   -0.161
+  ],
+  [
+   1791749944456.896,
+   "e2e",
+   -0.104
+  ],
+  [
+   1791749944456.896,
+   "ingest",
+   -4
+  ],
+  [
+   1791749944460.415,
+   "ingest",
+   -3
+  ],
+  [
+   1791749974454.629,
+   "produce_to_visible",
+   -0.371
+  ],
+  [
+   1791749974454.706,
+   "e2e",
+   -0.294
+  ],
+  [
+   1791749974454.706,
+   "produce_to_visible",
+   -0.294
+  ],
+  [
+   1791749974454.932,
+   "e2e",
+   -0.068
+  ],
+  [
+   1791749974454.932,
+   "produce_to_visible",
+   -1.068
+  ],
+  [
+   1791749974454.991,
+   "e2e",
+   -1.009
+  ],
+  [
+   1791749974454.991,
+   "produce_to_visible",
+   -1.009
+  ],
+  [
+   1791749974455.05,
+   "e2e",
+   -0.95
+  ],
+  [
+   1791749974455.05,
+   "produce_to_visible",
+   -1.95
+  ],
+  [
+   1791749974455.106,
+   "e2e",
+   -1.894
+  ],
+  [
+   1791749974455.106,
+   "produce_to_visible",
+   -1.894
+  ],
+  [
+   1791749974459.446,
+   "ingest",
+   -4
+  ],
+  [
+   1791749974462.192,
+   "ingest",
+   -3
+  ],
+  [
+   1791750004453.628,
+   "e2e",
+   -0.372
+  ],
+  [
+   1791750004453.628,
+   "produce_to_visible",
+   -0.372
+  ],
+  [
+   1791750004453.931,
+   "produce_to_visible",
+   -0.069
+  ],
+  [
+   1791750004454.026,
+   "e2e",
+   -0.974
+  ],
+  [
+   1791750004454.026,
+   "produce_to_visible",
+   -1.974
+  ],
+  [
+   1791750004461.52,
+   "ingest",
+   -4
+  ],
+  [
+   1791750004462.226,
+   "ingest",
+   -3
+  ],
+  [
+   1791750004462.481,
+   "ingest",
+   -3
+  ],
+  [
+   1791750004462.581,
+   "ingest",
+   -4
+  ],
+  [
+   1791750004462.723,
+   "ingest",
+   -4
+  ],
+  [
+   1791750004462.855,
+   "ingest",
+   -3
+  ],
+  [
+   1791750004462.959,
+   "ingest",
+   -4
+  ],
+  [
+   1791750004463.051,
+   "ingest",
+   -3
+  ],
+  [
+   1791750034456.669,
+   "e2e",
+   -1.331
+  ],
+  [
+   1791750034456.669,
+   "ingest",
+   -3
+  ],
+  [
+   1791750034460.601,
+   "ingest",
+   -3
+  ],
+  [
+   1791750064455.124,
+   "produce_to_visible",
+   -0.876
+  ],
+  [
+   1791750064455.232,
+   "e2e",
+   -0.768
+  ],
+  [
+   1791750064455.232,
+   "produce_to_visible",
+   -1.768
+  ],
+  [
+   1791750064455.294,
+   "e2e",
+   -0.706
+  ],
+  [
+   1791750064455.294,
+   "produce_to_visible",
+   -2.706
+  ],
+  [
+   1791750064455.366,
+   "e2e",
+   -1.634
+  ],
+  [
+   1791750064455.366,
+   "produce_to_visible",
+   -2.634
+  ],
+  [
+   1791750064455.466,
+   "e2e",
+   -2.534
+  ],
+  [
+   1791750064455.466,
+   "ingest",
+   -4
+  ],
+  [
+   1791750064457.277,
+   "e2e",
+   -0.723
+  ],
+  [
+   1791750064457.277,
+   "produce_to_visible",
+   -0.723
+  ],
+  [
+   1791750064459.549,
+   "ingest",
+   -5
+  ],
+  [
+   1791750094465.135,
+   "ingest",
+   -4
+  ],
+  [
+   1791750094467.917,
+   "ingest",
+   -4
+  ],
+  [
+   1791750094468.381,
+   "ingest",
+   -4
+  ],
+  [
+   1791750124454.44,
+   "produce_to_visible",
+   -0.56
+  ],
+  [
+   1791750124455.724,
+   "produce_to_visible",
+   -1.276
+  ],
+  [
+   1791750124455.866,
+   "e2e",
+   -0.134
+  ],
+  [
+   1791750124455.866,
+   "produce_to_visible",
+   -2.134
+  ],
+  [
+   1791750124455.997,
+   "e2e",
+   -0.003
+  ],
+  [
+   1791750124455.997,
+   "produce_to_visible",
+   -2.003
+  ],
+  [
+   1791750124456.128,
+   "e2e",
+   -0.872
+  ],
+  [
+   1791750124456.128,
+   "produce_to_visible",
+   -1.872
+  ],
+  [
+   1791750124457.994,
+   "e2e",
+   -0.006
+  ],
+  [
+   1791750124457.994,
+   "ingest",
+   -3
+  ],
+  [
+   1791750124461.126,
+   "ingest",
+   -2
+  ],
+  [
+   1791750124462.26,
+   "ingest",
+   -3
+  ]
+ ],
+ "run_problems": []
+}

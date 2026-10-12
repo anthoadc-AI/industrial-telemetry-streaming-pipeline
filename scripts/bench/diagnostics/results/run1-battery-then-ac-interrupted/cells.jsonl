@@ -1,0 +1,7 @@
+{"cell": "anchor-bridge-burst", "started": "2026-10-05T22:40:38", "power": {"ac": false, "battery_pct": 45}, "n": 200, "p50": 55.006, "p95": 62.119, "min": 9.685, "max": 75.203, "mean": 48.07, "delivered": 220, "errors": null}
+{"cell": "anchor-bridge-iso", "started": "2026-10-05T22:41:26", "power": {"ac": false, "battery_pct": 44}, "n": 200, "p50": 16.097, "p95": 24.454, "min": 7.611, "max": 27.33, "mean": 16.535, "delivered": 220, "errors": null}
+{"cell": "host-burst-base", "started": "2026-10-05T22:45:08", "power": {"ac": false, "battery_pct": 39}, "n": 200, "p50": 59.178, "p95": 68.154, "min": 51.133, "max": 70.462, "mean": 59.522, "delivered": 220, "errors": 0}
+{"cell": "host-iso-base", "started": "2026-10-05T22:45:53", "power": {"ac": false, "battery_pct": 38}, "n": 200, "p50": 16.632, "p95": 24.974, "min": 7.413, "max": 29.684, "mean": 17.145, "delivered": 220, "errors": 0}
+{"cell": "host-singles10-base", "started": "2026-10-05T22:49:34", "power": {"ac": true, "battery_pct": 33}, "n": 200, "p50": 16.016, "p95": 22.577, "min": 7.129, "max": 24.486, "mean": 15.888, "delivered": 220, "errors": 0}
+{"cell": "host-iso-nagleoff", "started": "2026-10-05T22:49:58", "power": {"ac": true, "battery_pct": 34}, "n": 199, "p50": 991.014, "p95": 994.338, "min": 6.847, "max": 995.529, "mean": 937.598, "delivered": 220, "errors": 1}
+{"cell": "host-iso-linger0", "started": "2026-10-05T23:00:32", "power": {"ac": true, "battery_pct": 53}, "n": 200, "p50": 4531.854, "p95": 4531.98, "min": 4528.132, "max": 4531.983, "mean": 4530.716, "delivered": 220, "errors": 1}

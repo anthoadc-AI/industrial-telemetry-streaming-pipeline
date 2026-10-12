@@ -1,0 +1,24 @@
+{
+ "planned": 990000,
+ "sent": 990000,
+ "acknowledged": 990000,
+ "raw_new_records": 917650,
+ "meter_records": 917650,
+ "meter_distinct": 917650,
+ "meter_duplicates": 0,
+ "meter_gaps": 72329,
+ "dlq_new_records": 0,
+ "consumer_lag_at_end": 0,
+ "alarms": {
+  "RAISED": 3398,
+  "CLEARED": 3298
+ },
+ "alarms_expected": {
+  "RAISED": 3398,
+  "CLEARED": 3298
+ },
+ "alarms_in_window": {
+  "RAISED": 3000,
+  "CLEARED": 3000
+ }
+}

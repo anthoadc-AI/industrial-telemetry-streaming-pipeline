@@ -1,0 +1,83 @@
+{
+ "run_id": "20261011T012449Z-calibrate-generator-6000-r1",
+ "mode": "calibrate-generator",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 6000.0,
+ "repetition": 1,
+ "assets": 100,
+ "clones_per_asset": 20,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T01:24:49.196769+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 6.72,
+  "git": {
+   "commit": "45f6f2434e22a8a9ab06ffc1b8f8d849c60508f6",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 5.7,
+ "cpu_peak_percent": {
+  "generator": 101.22,
+  "schema-registry": 8.04,
+  "broker": 139.85,
+  "mosquitto": 11.96,
+  "zookeeper": 66.34
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "generator_late": {
+   "n": 360000,
+   "p50": 0.2,
+   "p95": 0.9,
+   "p99": 3.3,
+   "min": 0.0,
+   "max": 25.92945098876953,
+   "underflow": 0
+  }
+ },
+ "publishable": false,
+ "finished": "2026-10-11T01:26:33.164096+00:00",
+ "measured_s": 60.0,
+ "t0_ms": 1791681931786,
+ "valid": true,
+ "generator_saturated": false,
+ "sustained": true,
+ "counters": {
+  "planned": 360000,
+  "sent": 360000,
+  "acknowledged": 360000,
+  "send_cpu_s": 59.952,
+  "send_wall_s": 60.004
+ },
+ "problems": [],
+ "run_problems": []
+}

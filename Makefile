@@ -31,8 +31,11 @@ stack
   make up                     start the full stack (core plus ThingsBoard), create the Kafka topics, set
                               Schema Registry compatibility, import the ThingsBoard rule chains
   make up-core                start the core stack only (Mosquitto, ZooKeeper, Kafka, Schema Registry), provision
-  make down                   stop and remove every container, always with --profile full (ThingsBoard
-                              included); named volumes are kept, never -v
+  make up-pipeline            make up, then the bridge, the alarm consumer and the ThingsBoard sink in
+                              containers (images built from docker/); do not also run them on the host
+  make up-pipeline-core       make up-core, then the bridge and the alarm consumer in containers
+  make down                   stop and remove every container of every profile (ThingsBoard and the
+                              pipeline containers included); named volumes are kept, never -v
   make logs                   follow the container logs (all profiles)
 
 quality
@@ -42,7 +45,14 @@ quality
   make test-integration       integration tests on the core stack (starts and stops it; run with no stack up)
   make test-integration-full  integration tests including ThingsBoard (same rule)
   make smoke                  the Phase 1 smoke run, 200 messages end to end (stack up, telemetry.raw empty)
+  make smoke-containers       the same 200-message run against the pipeline in containers (after make
+                              up-pipeline-core or make up-pipeline, telemetry.raw empty)
   make check-secrets          scan the staged files for secrets; the pre-commit hook runs it
+
+benchmark (config/benchmark.yaml; AC power, no other project's containers)
+  make bench-trial            the harness end to end: 30 s measured at a low rate, never publishable
+  make bench-plan             the runs of STEP 2 and the time they need
+  make bench-report           the figures tables, generated from bench/results/
 
 tools
   make install                create .venv, install the Python and npm dependencies, enable the
@@ -53,7 +63,7 @@ endef
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install up up-core down logs check-secrets lint test coverage test-integration test-integration-full smoke clean
+.PHONY: help install up up-core up-pipeline up-pipeline-core down logs check-secrets lint test coverage test-integration test-integration-full smoke smoke-containers bench-trial bench-plan bench-report clean
 
 # The recipe line is only there so Make does not report "Nothing to be done";
 # `exit 0` is a builtin of both sh and cmd.exe.
@@ -80,17 +90,34 @@ up-core:
 	$(COMPOSE) up -d --wait --wait-timeout 600 --force-recreate
 	$(VENV_PY) -m broker.kafka.provision
 
-# Always with --profile full. Verified on 2026-10-01 (Compose v2.40.3): a plain
+# The pipeline in containers (Phase 3, Task 3.3, owner decisions E1, D-B and
+# D-C): the stack first, provisioned (and, with ThingsBoard, the rule chains
+# imported), because the bridge and the alarm consumer refuse to start
+# without their topics and the sink needs the devices the import creates.
+# Then the images are built and only the pipeline containers are started:
+# --no-deps, so the running stack is not recreated (that would empty Kafka).
+up-pipeline: up
+	$(COMPOSE) --profile pipeline build
+	$(COMPOSE) --profile full --profile pipeline --profile pipeline-tb up -d --wait --wait-timeout 120 --no-deps --force-recreate bridge alarm-consumer thingsboard-sink
+
+up-pipeline-core: up-core
+	$(COMPOSE) --profile pipeline build
+	$(COMPOSE) --profile pipeline up -d --wait --wait-timeout 120 --no-deps --force-recreate bridge alarm-consumer
+
+# Every profile, so nothing the project started is left behind. Verified on 2026-10-01 (Compose v2.40.3): a plain
 # `docker compose down` removes only the services of the active profiles, so
 # after `make up` it stopped the four core services, left ThingsBoard running,
 # and could not remove the network ("Resource is still in use"). With
 # --profile full every service of the project is stopped and removed, and
-# with no ThingsBoard container it behaves exactly like a plain down.
+# with no ThingsBoard container it behaves exactly like a plain down. The
+# pipeline profiles (Task 3.3) are listed for the same reason.
+ALL_PROFILES := --profile full --profile pipeline --profile pipeline-tb --profile simulator
+
 down:
-	$(COMPOSE) --profile full down
+	$(COMPOSE) $(ALL_PROFILES) down
 
 logs:
-	$(COMPOSE) --profile full logs -f --tail=200
+	$(COMPOSE) $(ALL_PROFILES) logs -f --tail=200
 
 check-secrets:
 	$(VENV_PY) scripts/check_secrets.py
@@ -120,5 +147,18 @@ test-integration-full:
 smoke:
 	$(VENV_PY) scripts/smoke/run_smoke.py
 
+smoke-containers:
+	$(VENV_PY) scripts/smoke/run_smoke_containers.py
+
+# The benchmark (Phase 3, Task 3.3). The harness recreates the stack itself.
+bench-trial:
+	$(VENV_PY) -m bench.harness run --trial
+
+bench-plan:
+	$(VENV_PY) -m bench.harness plan
+
+bench-report:
+	$(VENV_PY) -m bench.report
+
 clean:
-	$(VENV_PY) scripts/clean.py --pycache .coverage coverage.xml coverage.json coverage .pytest_cache .ruff_cache smoke-logs
+	$(VENV_PY) scripts/clean.py --pycache .coverage coverage.xml coverage.json coverage .pytest_cache .ruff_cache smoke-logs smoke-logs-containers

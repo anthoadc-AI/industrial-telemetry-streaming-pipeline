@@ -1,0 +1,144 @@
+{
+ "run_id": "20261011T183034Z-throughput-2000-r1",
+ "mode": "throughput",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 2000.0,
+ "repetition": 1,
+ "assets": 100,
+ "clones_per_asset": 20,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T18:30:34.947162+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 5.82,
+  "git": {
+   "commit": "705fd88f597fc8a43b879ba89ebbace4dd82ced0",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 4.12,
+ "cpu_peak_percent": {
+  "generator": 76.93,
+  "meter": 30.29,
+  "bridge": 102.4,
+  "alarm-consumer": 36.0,
+  "schema-registry": 14.0,
+  "broker": 191.51,
+  "mosquitto": 19.3,
+  "zookeeper": 102.11
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "e2e": {
+   "n": 600000,
+   "p50": 6.1,
+   "p95": 17.0,
+   "p99": 41.0,
+   "min": -2.154052734375,
+   "max": 115.893798828125,
+   "underflow": 16
+  },
+  "ingest": {
+   "n": 600000,
+   "p50": 1.1,
+   "p95": 8.1,
+   "p99": 33.0,
+   "min": -5,
+   "max": 108,
+   "underflow": 25
+  },
+  "produce_to_visible": {
+   "n": 600000,
+   "p50": 5.0,
+   "p95": 8.3,
+   "p99": 15.0,
+   "min": -2.868408203125,
+   "max": 50.020263671875,
+   "underflow": 19
+  },
+  "alarm_e2e": {
+   "n": 6000,
+   "p50": 34.0,
+   "p95": 57.0,
+   "p99": null,
+   "min": 8.833,
+   "max": 149.129,
+   "underflow": 0
+  },
+  "generator_late": {
+   "n": 660000,
+   "p50": 0.1,
+   "p95": 0.2,
+   "p99": 0.7,
+   "min": 0.0,
+   "max": 13.92054557800293,
+   "underflow": 0
+  },
+  "produce_to_ack": {
+   "n": 600000,
+   "p50": 4.9,
+   "p95": 12.0,
+   "p99": 25.0,
+   "min": 0.367,
+   "max": 67.229,
+   "underflow": 0
+  }
+ },
+ "publishable": false,
+ "warmup_s": 30.0,
+ "measured_s": 300.0,
+ "t0_ms": 1791743477214,
+ "window": {
+  "start_ms": 1791743507214,
+  "end_ms": 1791743807214
+ },
+ "finished": "2026-10-11T18:36:48.473225+00:00",
+ "fetch_wait_max_ms": 5,
+ "lag_peak_s": 0.1145,
+ "lag_slope_s_per_s": -2.0895945807473816e-05,
+ "valid": false,
+ "sustainable": false,
+ "generator_saturated": false,
+ "problems": [
+  "CPU-bound client(s): bridge at 102 % of a core"
+ ],
+ "thresholds": {
+  "p99_ms": 1000.0,
+  "max_lag_s": 1.0,
+  "max_lag_slope_per_s": 0.001,
+  "max_lost": 0,
+  "max_late_p99_ms": 5.0,
+  "max_late_max_ms": 100.0
+ },
+ "run_problems": [
+  "CPU-bound client(s): bridge at 102 % of a core"
+ ]
+}

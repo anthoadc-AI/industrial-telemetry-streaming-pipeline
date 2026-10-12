@@ -26,6 +26,7 @@ from confluent_kafka.serialization import MessageField, SerializationContext, Se
 
 import bridge.mqtt_to_kafka.__main__ as bridge_main
 from bridge.mqtt_to_kafka.__main__ import Bridge, Stats, parse_args
+from bridge.mqtt_to_kafka.drop_monitor import DROPPED_TOPIC
 from conftest import FakeProducer, telemetry
 
 with warnings.catch_warnings():
@@ -421,6 +422,21 @@ def test_start_kafka_requires_both_topics(registry, json_log, monkeypatch):
     assert b.start_kafka() is False
 
 
+def test_start_kafka_producer_settings_come_from_config(registry, json_log, monkeypatch):
+    """config/bridge.yaml's settings reach the producer; the bridge's own keys always win."""
+    seen = []
+    fake = FakeMetadataProducer({"telemetry.raw": topic_meta(), "telemetry.dlq": topic_meta(1)})
+    monkeypatch.setattr(bridge_main, "Producer", lambda conf: seen.append(conf) or fake)
+    b = Bridge(parse_args(["--kafka-bootstrap", "kafka:1", "--client-id", "bridge-x"]))
+    b.producer_settings["linger.ms"] = 0  # as a generated benchmark config would set it
+    assert b.start_kafka() is True
+    conf = seen[0]
+    assert {k: conf[k] for k in ("acks", "enable.idempotence", "linger.ms", "bootstrap.servers", "client.id")} == {
+        "acks": "all", "enable.idempotence": True, "linger.ms": 0, "bootstrap.servers": "kafka:1", "client.id": "bridge-x"}
+    assert conf["logger"].name == "librdkafka"
+    assert events(json_log, "kafka_ready")[0]["producer_settings"] == {"acks": "all", "enable.idempotence": True, "linger.ms": 0}
+
+
 def test_start_kafka_fails_fast_when_kafka_is_unreachable(registry, json_log, monkeypatch):
     monkeypatch.setattr(bridge_main, "Producer", FakeMetadataProducer(error="transport failure"))
     assert Bridge(parse_args([])).start_kafka() is False
@@ -528,3 +544,47 @@ def test_signal_handlers_set_the_stop_event(json_log):
     finally:
         for name, handler in saved.items():
             signal.signal(getattr(signal, name), handler)
+
+
+# --- Mosquitto's dropped counter (DETENTE 3.3.h; the monitor itself: test_drop_monitor.py) ---------------------
+
+
+def test_the_drop_monitor_is_on_by_default_on_a_connection_of_its_own(bridge):
+    assert bridge.drop_monitor is not None
+    assert bridge.drop_monitor.client_id == f"{bridge.args.client_id}-drops"
+
+
+def test_start_drop_monitor_delegates_and_its_failure_stops_the_start(bridge, monkeypatch):
+    calls = []
+    monkeypatch.setattr(bridge.drop_monitor, "start", lambda timeout_s: calls.append(timeout_s) or False)
+    assert bridge.start_drop_monitor() is False
+    assert calls == [bridge_main.CONNECT_TIMEOUT_S]
+
+
+def test_a_disabled_drop_monitor_is_a_warning(bridge, json_log):
+    bridge.drop_monitor = None
+    assert bridge.start_drop_monitor() is True
+    assert events(json_log, "drop_monitor_disabled")[0]["level"] == "WARNING"
+    bridge.args.count = 1
+    bridge.inbox.put(received(telemetry()))
+    assert bridge.run(threading.Event()) == "count"
+    bridge.shutdown("signal")
+    assert events(json_log, "run_finished")[0]["mosquitto_dropped_during_run"] is None
+
+
+def test_the_main_loop_checks_the_silence_of_sys(bridge, json_log):
+    bridge.drop_monitor.last_update = time.monotonic() - 3600
+    bridge.args.count = 1
+    bridge.inbox.put(received(telemetry()))
+    assert bridge.run(threading.Event()) == "count"
+    assert events(json_log, "mosquitto_sys_silent")
+
+
+def test_shutdown_stops_the_drop_monitor_and_reports_the_drops(bridge, json_log):
+    stopped = []
+    bridge.drop_monitor.stop = lambda: stopped.append(True)
+    bridge.drop_monitor.on_value(DROPPED_TOPIC, b"5", 1.0)
+    bridge.drop_monitor.on_value(DROPPED_TOPIC, b"12", 2.0)
+    assert bridge.shutdown("signal") is True
+    assert stopped == [True]
+    assert events(json_log, "run_finished")[0]["mosquitto_dropped_during_run"] == 7

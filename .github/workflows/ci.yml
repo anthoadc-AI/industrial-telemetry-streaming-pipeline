@@ -1,6 +1,6 @@
 # Continuous integration for the industrial telemetry streaming pipeline.
 #
-# Three jobs:
+# Four jobs:
 #   checks            lint (ruff, node --check) and the unit tests of both
 #                     languages with coverage (lines and branches >= 80 %
 #                     enforced per language) (Phase 2 Task 2.6)
@@ -12,6 +12,13 @@
 #                     mapping. Runs only on a push to main and on a manual
 #                     dispatch, never on other branches, so it never blocks a
 #                     branch (owner decision, Phase 3 DETENTE 3.2.a)
+#   pipeline-containers  the pipeline in containers: builds the images of
+#                     docker/, starts the core stack with the bridge and the
+#                     alarm consumer as containers (make up-pipeline-core) and
+#                     runs the 200-message smoke against them (make
+#                     smoke-containers) (owner decisions E1 and D-D, Phase 3
+#                     Task 3.3). The integration job also builds the images,
+#                     for tests/integration/test_containers.py.
 #
 # Triggers: a push to any branch (owner decision, Phase 3 DETENTE 3.1.a; until
 # then only main and feature/**, so docs/** branches ran no CI) and pull
@@ -150,3 +157,51 @@ jobs:
           path: ${{ runner.temp }}/pytest
           if-no-files-found: warn
           retention-days: 7
+
+  pipeline-containers:
+    name: Pipeline in containers (smoke)
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # The host side provisions the topics and runs the smoke checks.
+      - name: Install dependencies
+        run: make install
+      - name: Environment file
+        run: cp .env.example .env
+      - name: Pull core images
+        run: docker compose pull
+      # A separate step so the cold build time of the two images is visible.
+      - name: Build pipeline images
+        run: docker compose --profile pipeline build
+      - name: Start the core stack and the pipeline containers
+        run: make up-pipeline-core
+      - name: Smoke against the containers
+        timeout-minutes: 10
+        run: make smoke-containers
+      - name: Save container logs
+        if: always()
+        run: mkdir -p smoke-logs-containers && docker compose --profile pipeline logs --no-color --timestamps > smoke-logs-containers/docker-compose.log 2>&1 || true
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pipeline-containers-logs
+          path: smoke-logs-containers
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Stop the stack
+        if: always()
+        run: make down

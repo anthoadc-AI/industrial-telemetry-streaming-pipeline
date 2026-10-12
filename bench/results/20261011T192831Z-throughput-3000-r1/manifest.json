@@ -1,0 +1,256 @@
+{
+ "run_id": "20261011T192831Z-throughput-3000-r1",
+ "harness_revision": "after the 3.3.f harness change",
+ "mode": "throughput",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 3000.0,
+ "repetition": 1,
+ "assets": 100,
+ "clones_per_asset": 20,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T19:28:31.898593+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 5.84,
+  "git": {
+   "commit": "df684f64ff066c5435fa170cfe90d9ef4fddcc11",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 4.07,
+ "cpu_peak_percent": {
+  "generator": 96.53,
+  "meter": 34.62,
+  "alarm-consumer": 34.38,
+  "bridge": 109.65,
+  "schema-registry": 48.81,
+  "broker": 198.31,
+  "mosquitto": 21.38,
+  "zookeeper": 96.89
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "e2e": {
+   "n": 829418,
+   "p50": 361.0,
+   "p95": 466.0,
+   "p99": 524.0,
+   "min": 248.622802734375,
+   "max": 839.513427734375,
+   "underflow": 0
+  },
+  "ingest": {
+   "n": 829418,
+   "p50": 355.0,
+   "p95": 459.0,
+   "p99": 517.0,
+   "min": 245,
+   "max": 830,
+   "underflow": 0
+  },
+  "produce_to_visible": {
+   "n": 829418,
+   "p50": 6.5,
+   "p95": 10.0,
+   "p99": 16.0,
+   "min": -1.300537109375,
+   "max": 91.510986328125,
+   "underflow": 19
+  },
+  "alarm_e2e": {
+   "n": 6000,
+   "p50": 397.0,
+   "p95": 499.0,
+   "p99": null,
+   "min": 291.228,
+   "max": 824.001,
+   "underflow": 0
+  },
+  "generator_late": {
+   "n": 990000,
+   "p50": 0.1,
+   "p95": 0.4,
+   "p99": 1.0,
+   "min": 0.0,
+   "max": 23.54288101196289,
+   "underflow": 0
+  },
+  "produce_to_ack": {
+   "n": 829226,
+   "p50": 16.0,
+   "p95": 62.0,
+   "p99": 94.0,
+   "min": 0.492,
+   "max": 173.862,
+   "underflow": 0
+  }
+ },
+ "publishable": false,
+ "warmup_s": 30.0,
+ "measured_s": 300.0,
+ "t0_ms": 1791746953124,
+ "window": {
+  "start_ms": 1791746983124,
+  "end_ms": 1791747283124
+ },
+ "finished": "2026-10-11T19:37:49.732258+00:00",
+ "fetch_wait_max_ms": 5,
+ "lag_peak_s": 24.496666666666666,
+ "lag_slope_s_per_s": 0.07456229776980552,
+ "valid": false,
+ "sustainable": false,
+ "generator_saturated": false,
+ "problems": [
+  "telemetry.raw gained 917650 records for 990000 sent",
+  "meter saw 917650 distinct of 990000 sent, 72329 gap(s)",
+  "CPU-bound instrument(s): generator at 97 % of a core"
+ ],
+ "thresholds": {
+  "p99_ms": 1000.0,
+  "max_lag_s": 1.0,
+  "max_lag_slope_per_s": 0.001,
+  "max_lost": 0,
+  "max_late_p99_ms": 5.0,
+  "max_late_max_ms": 100.0
+ },
+ "clock": {
+  "samples": 5215,
+  "largest_backward_step_ms": 7.305,
+  "backward_steps": 17,
+  "forward_steps": 0,
+  "total_drift_ms": -80.324,
+  "negative_samples": 19,
+  "negatives_after_a_backward_step": 0,
+  "window_ms": 1000.0
+ },
+ "negatives": [
+  [
+   1791747034299.572,
+   "produce_to_visible",
+   -0.428
+  ],
+  [
+   1791747034299.637,
+   "produce_to_visible",
+   -0.363
+  ],
+  [
+   1791747034299.699,
+   "produce_to_visible",
+   -1.301
+  ],
+  [
+   1791747034299.758,
+   "produce_to_visible",
+   -1.242
+  ],
+  [
+   1791747034299.815,
+   "produce_to_visible",
+   -1.185
+  ],
+  [
+   1791747034300.569,
+   "produce_to_visible",
+   -0.431
+  ],
+  [
+   1791747034300.635,
+   "produce_to_visible",
+   -0.365
+  ],
+  [
+   1791747034300.701,
+   "produce_to_visible",
+   -0.299
+  ],
+  [
+   1791747034301.344,
+   "produce_to_visible",
+   -0.656
+  ],
+  [
+   1791747034301.418,
+   "produce_to_visible",
+   -0.582
+  ],
+  [
+   1791747034301.509,
+   "produce_to_visible",
+   -0.491
+  ],
+  [
+   1791747094302.68,
+   "produce_to_visible",
+   -0.32
+  ],
+  [
+   1791747094302.741,
+   "produce_to_visible",
+   -0.259
+  ],
+  [
+   1791747124302.562,
+   "produce_to_visible",
+   -0.438
+  ],
+  [
+   1791747124302.621,
+   "produce_to_visible",
+   -0.379
+  ],
+  [
+   1791747124302.678,
+   "produce_to_visible",
+   -0.322
+  ],
+  [
+   1791747184305.587,
+   "produce_to_visible",
+   -0.413
+  ],
+  [
+   1791747274305.515,
+   "produce_to_visible",
+   -0.485
+  ],
+  [
+   1791747274305.632,
+   "produce_to_visible",
+   -0.368
+  ]
+ ],
+ "run_problems": [
+  "telemetry.raw gained 917650 records for 990000 sent",
+  "meter saw 917650 distinct of 990000 sent, 72329 gap(s)",
+  "CPU-bound instrument(s): generator at 97 % of a core"
+ ]
+}

@@ -1,0 +1,429 @@
+{
+ "run_id": "20261011T203340Z-throughput-2000-r4",
+ "harness_revision": "after the 3.3.f harness change",
+ "mode": "throughput",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 2000.0,
+ "repetition": 4,
+ "assets": 100,
+ "clones_per_asset": 20,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T20:33:40.653323+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 5.92,
+  "git": {
+   "commit": "3d24ec305b3c66a7d62bcf23209d8f8914d5a664",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 3.74,
+ "cpu_peak_percent": {
+  "generator": 66.59,
+  "meter": 28.64,
+  "alarm-consumer": 36.33,
+  "bridge": 97.05,
+  "schema-registry": 19.09,
+  "broker": 183.24,
+  "mosquitto": 21.53,
+  "zookeeper": 86.11
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "e2e": {
+   "n": 600000,
+   "p50": 5.4,
+   "p95": 9.4,
+   "p99": 17.0,
+   "min": -2.760986328125,
+   "max": 77.091064453125,
+   "underflow": 14
+  },
+  "ingest": {
+   "n": 600000,
+   "p50": 1.1,
+   "p95": 2.1,
+   "p99": 6.1,
+   "min": -6,
+   "max": 38,
+   "underflow": 23
+  },
+  "produce_to_visible": {
+   "n": 600000,
+   "p50": 4.8,
+   "p95": 7.4,
+   "p99": 12.0,
+   "min": -2.760986328125,
+   "max": 76.091064453125,
+   "underflow": 18
+  },
+  "alarm_e2e": {
+   "n": 6000,
+   "p50": 34.0,
+   "p95": 53.0,
+   "p99": null,
+   "min": 5.555,
+   "max": 70.692,
+   "underflow": 0
+  },
+  "generator_late": {
+   "n": 660000,
+   "p50": 0.1,
+   "p95": 0.2,
+   "p99": 0.4,
+   "min": 0.0,
+   "max": 12.902498245239258,
+   "underflow": 0
+  },
+  "produce_to_ack": {
+   "n": 600000,
+   "p50": 4.4,
+   "p95": 7.4,
+   "p99": 14.0,
+   "min": 0.35,
+   "max": 86.468,
+   "underflow": 0
+  }
+ },
+ "publishable": true,
+ "warmup_s": 30.0,
+ "measured_s": 300.0,
+ "t0_ms": 1791750862001,
+ "window": {
+  "start_ms": 1791750892001,
+  "end_ms": 1791751192001
+ },
+ "finished": "2026-10-11T20:39:55.272015+00:00",
+ "fetch_wait_max_ms": 5,
+ "lag_peak_s": 0.1175,
+ "lag_slope_s_per_s": -4.5736980381874956e-05,
+ "valid": true,
+ "sustainable": true,
+ "generator_saturated": false,
+ "problems": [],
+ "thresholds": {
+  "p99_ms": 1000.0,
+  "max_lag_s": 1.0,
+  "max_lag_slope_per_s": 0.001,
+  "max_lost": 0,
+  "max_late_p99_ms": 5.0,
+  "max_late_max_ms": 100.0
+ },
+ "clock": {
+  "samples": 3390,
+  "largest_backward_step_ms": 7.153,
+  "backward_steps": 11,
+  "forward_steps": 0,
+  "total_drift_ms": -47.311,
+  "negative_samples": 55,
+  "negatives_after_a_backward_step": 55,
+  "expected_by_chance": 0.35,
+  "window_ms": 100.0
+ },
+ "negatives": [
+  [
+   1791750904495.429,
+   "produce_to_visible",
+   -0.571
+  ],
+  [
+   1791750904497.819,
+   "e2e",
+   -0.181
+  ],
+  [
+   1791750904497.819,
+   "ingest",
+   -4
+  ],
+  [
+   1791750904499.117,
+   "ingest",
+   -4
+  ],
+  [
+   1791750904499.249,
+   "ingest",
+   -4
+  ],
+  [
+   1791750934493.242,
+   "e2e",
+   -0.758
+  ],
+  [
+   1791750934493.242,
+   "produce_to_visible",
+   -1.758
+  ],
+  [
+   1791750934493.327,
+   "e2e",
+   -0.673
+  ],
+  [
+   1791750934493.327,
+   "produce_to_visible",
+   -1.673
+  ],
+  [
+   1791750934493.39,
+   "e2e",
+   -1.61
+  ],
+  [
+   1791750934493.39,
+   "produce_to_visible",
+   -1.61
+  ],
+  [
+   1791750934494.604,
+   "e2e",
+   -1.396
+  ],
+  [
+   1791750934494.604,
+   "produce_to_visible",
+   -1.396
+  ],
+  [
+   1791750934498.751,
+   "ingest",
+   -4
+  ],
+  [
+   1791750934498.9,
+   "ingest",
+   -4
+  ],
+  [
+   1791750964493.239,
+   "e2e",
+   -2.761
+  ],
+  [
+   1791750964493.239,
+   "produce_to_visible",
+   -2.761
+  ],
+  [
+   1791750964497.576,
+   "ingest",
+   -3
+  ],
+  [
+   1791750964497.635,
+   "ingest",
+   -4
+  ],
+  [
+   1791750994495.637,
+   "e2e",
+   -0.363
+  ],
+  [
+   1791750994495.637,
+   "produce_to_visible",
+   -0.363
+  ],
+  [
+   1791750994495.85,
+   "e2e",
+   -2.15
+  ],
+  [
+   1791750994495.85,
+   "produce_to_visible",
+   -2.15
+  ],
+  [
+   1791750994495.979,
+   "e2e",
+   -2.021
+  ],
+  [
+   1791750994495.979,
+   "ingest",
+   -5
+  ],
+  [
+   1791750994497.451,
+   "produce_to_visible",
+   -0.549
+  ],
+  [
+   1791750994497.654,
+   "produce_to_visible",
+   -0.346
+  ],
+  [
+   1791750994499.886,
+   "ingest",
+   -6
+  ],
+  [
+   1791750994500.007,
+   "ingest",
+   -6
+  ],
+  [
+   1791751024499.713,
+   "ingest",
+   -1
+  ],
+  [
+   1791751024499.814,
+   "ingest",
+   -1
+  ],
+  [
+   1791751024505.183,
+   "ingest",
+   -1
+  ],
+  [
+   1791751054497.529,
+   "produce_to_visible",
+   -0.471
+  ],
+  [
+   1791751054497.8,
+   "e2e",
+   -1.2
+  ],
+  [
+   1791751054497.8,
+   "ingest",
+   -4
+  ],
+  [
+   1791751054500.705,
+   "ingest",
+   -3
+  ],
+  [
+   1791751084494.717,
+   "e2e",
+   -1.283
+  ],
+  [
+   1791751084494.717,
+   "produce_to_visible",
+   -1.283
+  ],
+  [
+   1791751084500.969,
+   "ingest",
+   -4
+  ],
+  [
+   1791751084501.083,
+   "ingest",
+   -3
+  ],
+  [
+   1791751114495.491,
+   "produce_to_visible",
+   -0.509
+  ],
+  [
+   1791751114497.489,
+   "produce_to_visible",
+   -0.511
+  ],
+  [
+   1791751114498.687,
+   "ingest",
+   -4
+  ],
+  [
+   1791751114501.045,
+   "ingest",
+   -4
+  ],
+  [
+   1791751144495.572,
+   "produce_to_visible",
+   -0.428
+  ],
+  [
+   1791751144497.786,
+   "e2e",
+   -0.214
+  ],
+  [
+   1791751144497.786,
+   "produce_to_visible",
+   -0.214
+  ],
+  [
+   1791751144497.858,
+   "e2e",
+   -0.142
+  ],
+  [
+   1791751144497.858,
+   "ingest",
+   -4
+  ],
+  [
+   1791751144500.614,
+   "ingest",
+   -4
+  ],
+  [
+   1791751174495.581,
+   "e2e",
+   -0.419
+  ],
+  [
+   1791751174495.581,
+   "produce_to_visible",
+   -0.419
+  ],
+  [
+   1791751174495.776,
+   "produce_to_visible",
+   -0.224
+  ],
+  [
+   1791751174500.984,
+   "ingest",
+   -4
+  ],
+  [
+   1791751174501.098,
+   "ingest",
+   -3
+  ]
+ ],
+ "run_problems": []
+}

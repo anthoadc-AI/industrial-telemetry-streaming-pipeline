@@ -38,6 +38,11 @@ with warnings.catch_warnings():
     warnings.showwarning = _show
 
 
+# Every profile of docker-compose.yml, as `make down` uses them: stopping or listing with these leaves nothing
+# of the project behind, including the pipeline containers (pipeline-tb is only valid together with full).
+ALL_PROFILES = ("--profile", "full", "--profile", "pipeline", "--profile", "pipeline-tb", "--profile", "simulator")
+
+
 def compose(*args: str, timeout: float = 900) -> subprocess.CompletedProcess:
     return subprocess.run(["docker", "compose", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout)
 
@@ -583,3 +588,58 @@ def devices_off_pipeline_queue(tb) -> list[dict]:
                 off.append({"device": d["name"], "type": d["type"], "profile": profile["name"],
                             "queue": profile.get("defaultQueueName")})
     return off
+
+
+# --- Mosquitto's $SYS counters (DETENTE 3.3.h) ---------------------------------------------------------------------
+
+SYS_DROPPED = "$SYS/broker/publish/messages/dropped"
+SYS_STORED = "$SYS/broker/store/messages/count"
+SYS_UPTIME = "$SYS/broker/uptime"
+SYS_INTERVAL_S = 10  # sys_interval in broker/mosquitto/mosquitto.conf
+
+
+class MosquittoSys:
+    """Mosquitto's $SYS counters from a QoS 0 subscription of its own; use as a context manager.
+
+    Measured on Mosquitto 2.1.2 (DETENTE 3.3.i): every $SYS value is retained, so the current one arrives on
+    subscribing, and a counter is published again only when it has changed; $SYS/broker/uptime changes, so it is
+    published every sys_interval and marks each update. A counter's value after an instant is therefore its latest
+    sample once an uptime update later than that instant has arrived."""
+
+    def __init__(self, *topics: str, host: str = "localhost", port: int = 1883):
+        import paho.mqtt.client as mqtt
+
+        self.topics, self.host, self.port = (*topics, SYS_UPTIME), host, port
+        self.samples: list[tuple[float, str, str]] = []  # (monotonic, topic, payload)
+        self.client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=unique("it-sys"))
+        self.client.on_message = lambda client, userdata, msg: self.samples.append(
+            (time.monotonic(), msg.topic, msg.payload.decode()))
+
+    def __enter__(self) -> MosquittoSys:
+        self.client.connect(self.host, self.port, keepalive=60)
+        for topic in self.topics:
+            self.client.subscribe(topic, qos=0)
+        self.client.loop_start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.client.loop_stop()
+        self.client.disconnect()
+
+    def value(self, topic: str, after: float, timeout: float = SYS_INTERVAL_S * 2 + 5) -> float:
+        """topic's value as of Mosquitto's first $SYS update at or after the monotonic instant `after`."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            samples = list(self.samples)
+            if any(name == SYS_UPTIME and t >= after for t, name, _ in samples):
+                values = [float(p) for _, name, p in samples if name == topic]
+                if values:
+                    return values[-1]
+            time.sleep(0.2)
+        raise TimeoutError(f"no $SYS update with {topic} within {timeout:g} s")
+
+    def peak(self, topic: str, since: float) -> float | None:
+        """The highest value of topic published since the monotonic instant `since` (retained one included)."""
+        values = [float(p) for t, name, p in list(self.samples) if name == topic]
+        later = [float(p) for t, name, p in list(self.samples) if name == topic and t >= since]
+        return max(later or values[-1:], default=None)

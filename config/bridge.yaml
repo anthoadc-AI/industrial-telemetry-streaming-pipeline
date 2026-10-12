@@ -1,0 +1,28 @@
+# The MQTT-to-Kafka bridge (bridge/mqtt_to_kafka).
+producer:
+  # librdkafka producer settings, passed to the bridge's Kafka producer as
+  # written (key: value). These two are the bridge's behaviour since Phase 1:
+  # every write waits for all in-sync replicas, and retries cannot duplicate
+  # or reorder a record. Any setting not listed keeps librdkafka's default
+  # (linger.ms 5, socket.nagle.disable false, no compression, ...).
+  #
+  # bootstrap.servers, client.id and logger are set by the bridge itself
+  # (command line and environment) and are refused here.
+  #
+  # The benchmark (Task 3.3, owner decisions D2 and D-F) runs the bridge with
+  # a generated copy of config/ when it measures another value, for example
+  # linger.ms: the bridge's code is never changed for that.
+  acks: all
+  enable.idempotence: true
+
+# Mosquitto's dropped-messages counter (DETENTE 3.3.h). Mosquitto keeps a
+# finite queue for each subscribed client (broker/mosquitto/mosquitto.conf);
+# past it, it drops new messages for that client and still acknowledges the
+# publisher. When enabled, the bridge subscribes to
+# $SYS/broker/publish/messages/dropped on a connection of its own, logs every
+# increase as mqtt_messages_dropped at ERROR with the increase, and refuses to
+# start if it cannot subscribe. The counter is broker-wide (it counts drops for
+# any client, not only the bridge) and Mosquitto updates it every 10 s
+# (sys_interval), so a drop is logged up to 10 s after it happens.
+drop_monitor:
+  enabled: true

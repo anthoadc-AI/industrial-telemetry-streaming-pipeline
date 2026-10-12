@@ -12,6 +12,11 @@
 #   (none)    the core stack: mosquitto, zookeeper, broker, schema-registry.
 #             What CI and `make up-core` run.
 #   full      adds thingsboard. `make up` runs it.
+#   pipeline  the bridge and the alarm consumer in containers (built from
+#             docker/). `make up-pipeline-core` and `make up-pipeline`.
+#   pipeline-tb  the ThingsBoard sink in a container, always with full.
+#             `make up-pipeline`.
+#   simulator the edge simulator, for one-off `docker compose run` only.
 #   firebase  reserved for the optional Firebase sink, which is disabled by
 #             default and has no service yet.
 # No core service depends on thingsboard, so the core stack starts alone.
@@ -24,12 +29,19 @@
 # Host ports come from .env (see .env.example), with the defaults shown.
 # No service has a restart policy: nothing comes back by itself after a
 # Docker Desktop restart.
+#
+# Every service sets stop_grace_period. Docker Desktop's API proxy creates
+# containers that set none with StopTimeout 1 s (the Linux engine's default is
+# 10 s), so without explicit values a stop would SIGKILL anything slower than
+# one second on Docker Desktop and not on Linux CI. ThingsBoard is the
+# exception: it ignores SIGTERM (see its service).
 
 name: industrial-telemetry
 
 services:
   mosquitto:
     image: eclipse-mosquitto:2.1.2-alpine
+    stop_grace_period: 5s
     ports:
       - "${MQTT_PORT:-1883}:1883"
     volumes:
@@ -47,6 +59,7 @@ services:
 
   zookeeper:
     image: confluentinc/cp-zookeeper:6.1.1
+    stop_grace_period: 10s
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -59,8 +72,14 @@ services:
       - /var/lib/zookeeper/data:uid=1000,gid=1000
       - /var/lib/zookeeper/log:uid=1000,gid=1000
       - /etc/zookeeper/secrets:uid=1000,gid=1000
+    # Healthcheck without a JVM (DETENTE 3.3.i): `cub zk-ready` started a Java
+    # client every ~11 s inside this container (about 0.75 s and up to 0.8 of a
+    # core each time, measured idle on 2026-10-12). `srvr` is a ZooKeeper
+    # four-letter command allowed by default in 3.5.9; its reply has a
+    # "Mode:" line only while the server is serving. Unlike zk-ready it opens
+    # no client session.
     healthcheck:
-      test: ["CMD", "cub", "zk-ready", "localhost:2181", "5"]
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep -q '^Mode: '"]
       interval: 10s
       timeout: 10s
       retries: 6
@@ -68,6 +87,7 @@ services:
 
   broker:
     image: confluentinc/cp-server:6.1.1
+    stop_grace_period: 30s
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -83,7 +103,6 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
       # Topics are created explicitly from config/topics.yaml by `make up`;
       # a typo in a topic name must fail, not create a new topic.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
@@ -91,11 +110,31 @@ services:
       # this stack. Telemetry to Confluent is already off in cp-server 6.1.1
       # (confluent.telemetry.enabled = false in the broker's startup config).
       CONFLUENT_METRICS_ENABLE: "false"
+      # cp-server features this stack does not use (DETENTE 3.3.i). That
+      # setting does not stop the telemetry reporter's local exporter, which
+      # cp-server adds by default (confluent.reporters.telemetry.auto.enable)
+      # and which creates _confluent-telemetry-metrics and a consumer group;
+      # Self-Balancing (confluent.balancer.enable) has nothing to balance on
+      # one broker and creates three _confluent_balancer_* topics. Nothing in
+      # this repository reads those topics. Measured idle on 2026-10-12, 300 s
+      # each: four internal topics and the sampler group no longer created,
+      # broker mean CPU 19.6 -> 15.8 % of a core, samples >= 1.2 cores 8 -> 5
+      # (with the old JVM healthcheck in both).
+      KAFKA_CONFLUENT_BALANCER_ENABLE: "false"
+      KAFKA_CONFLUENT_REPORTERS_TELEMETRY_AUTO_ENABLE: "false"
     tmpfs:
       - /var/lib/kafka/data:uid=1000,gid=1000
       - /etc/kafka/secrets:uid=1000,gid=1000
+    # Healthcheck without a JVM (DETENTE 3.3.i): `cub kafka-ready` started a
+    # Java admin client every ~11 s inside this container, about 1.3 s and up
+    # to 1.6 cores each time; idle, it was most of the broker container's CPU
+    # (mean 18.0 % of a core with it, 5.9 % with this check, 2026-10-12). This
+    # check only proves that the listener accepts TCP connections; kafka-ready
+    # also required a metadata answer listing the broker, which can come a
+    # moment later. Schema Registry's image still runs kafka-ready once, in
+    # its own start-up script, before it starts.
     healthcheck:
-      test: ["CMD", "cub", "kafka-ready", "-b", "localhost:9092", "1", "5"]
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
       interval: 10s
       timeout: 15s
       retries: 10
@@ -103,6 +142,7 @@ services:
 
   schema-registry:
     image: confluentinc/cp-schema-registry:6.1.1
+    stop_grace_period: 10s
     depends_on:
       broker:
         condition: service_healthy
@@ -123,6 +163,13 @@ services:
 
   thingsboard:
     image: thingsboard/tb-postgres:4.2.1.1
+    # The image's start script (start-tb.sh) runs as PID 1 and does not forward
+    # SIGTERM to ThingsBoard or Postgres (verified 2026-10-10: SIGTERM, then
+    # SIGKILL at the end of a 60 s grace period, exit 137), so the container
+    # always ends by SIGKILL and Postgres does crash recovery on the next start.
+    # A longer grace period would only slow make down. Backlog: a wrapper with a
+    # SIGTERM trap (docs/internal/phase3_backlog.md).
+    stop_grace_period: 5s
     profiles: ["full"]
     ports:
       - "${TB_HTTP_PORT:-8080}:9090"
@@ -167,6 +214,128 @@ services:
       retries: 20
       # The first start installs the database, which takes minutes.
       start_period: 300s
+
+  # The pipeline's own components, in containers (Phase 3, Task 3.3, owner
+  # decision E1). They run until stopped, reach the other services by name on
+  # the project network, and publish no port. `make up-pipeline` and
+  # `make up-pipeline-core` start them after the stack is provisioned (the
+  # bridge and the alarm consumer refuse to start without their topics).
+  # Never run them together with the same components started on the host:
+  # two bridges would both receive every MQTT message and write it twice.
+  #
+  # All of them: no credential in the file (the gateway token is interpolated
+  # from .env), a read-only root file system, no Linux capabilities, an init
+  # process so SIGTERM reaches the component (each stops cleanly on it), a
+  # stop grace period of 30 s (Docker Desktop 4.53 created this project's
+  # containers with StopTimeout 1 s, verified with docker inspect on
+  # 2026-10-09, origin not identified; the alarm consumer needed 1.5 to 3.6 s
+  # to disconnect and was killed mid-stop, and the bridge flushes for up to
+  # 10 s), and
+  # no pull: the images exist only as local builds. The Python image is built
+  # once, by the bridge service, and reused by the sink and the simulator.
+  bridge:
+    image: industrial-telemetry/pipeline-python:local
+    build:
+      context: .
+      dockerfile: docker/pipeline-python/Dockerfile
+    pull_policy: build
+    profiles: ["pipeline"]
+    command: ["python", "-m", "bridge.mqtt_to_kafka"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      KAFKA_BOOTSTRAP: "broker:29092"
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  alarm-consumer:
+    image: industrial-telemetry/alarm-consumer:local
+    build:
+      context: .
+      dockerfile: docker/alarm-consumer/Dockerfile
+    pull_policy: build
+    profiles: ["pipeline"]
+    # The consumer group is overridable so a test can start the container on a
+    # group of its own; the default is the consumer's own default.
+    command: ["node", "processing/alarm_consumer/index.js", "--group-id", "${ALARM_CONSUMER_GROUP:-alarm-consumer}"]
+    environment:
+      KAFKA_BOOTSTRAP: "broker:29092"
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # In a profile of its own: it needs ThingsBoard (profile full) and the
+  # devices, profiles and gateway that the import script creates, so it starts
+  # only after `make up` has run that script. Activate pipeline-tb together
+  # with full (`--profile full --profile pipeline-tb`): it depends on the
+  # thingsboard service, which exists only in full.
+  thingsboard-sink:
+    # The bridge's image (built by its service; the make targets build it first).
+    image: industrial-telemetry/pipeline-python:local
+    pull_policy: never
+    profiles: ["pipeline-tb"]
+    command: ["python", "-m", "processing.thingsboard_sink"]
+    environment:
+      KAFKA_BOOTSTRAP: "broker:29092"
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      TB_HOST: thingsboard
+      TB_MQTT_PORT: "1883"
+      # Empty when unset: the sink then stops at start-up (settings_missing).
+      TB_GATEWAY_TOKEN: "${TB_GATEWAY_TOKEN:-}"
+      # Overridable so a test can start the container on a group of its own.
+      THINGSBOARD_SINK_GROUP: "${THINGSBOARD_SINK_GROUP:-thingsboard-sink}"
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      thingsboard:
+        condition: service_healthy
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # The edge simulator, for one-off runs only (`docker compose run --rm
+  # simulator --count 200`, as `make smoke-containers` does): its profile is
+  # never started by a make target.
+  simulator:
+    # The bridge's image (built by its service; the make targets build it first).
+    image: industrial-telemetry/pipeline-python:local
+    pull_policy: never
+    profiles: ["simulator"]
+    entrypoint: ["python", "-m", "edge.simulator"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
 volumes:
   tb-data:

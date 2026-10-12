@@ -17,3 +17,5 @@ scripts/hooks/* text eol=lf
 .gitattributes  text eol=lf
 .gitignore      text eol=lf
 LICENSE         text eol=lf
+Dockerfile      text eol=lf
+.dockerignore   text eol=lf

@@ -1,0 +1,140 @@
+{
+ "run_id": "20261011T165715Z-latency-5-r4",
+ "mode": "latency",
+ "trial": false,
+ "sensitivity": false,
+ "rate_per_s": 5.0,
+ "repetition": 4,
+ "assets": 5,
+ "clones_per_asset": 0,
+ "bridge_log_level": "INFO",
+ "bridge_producer": {
+  "acks": "all",
+  "enable.idempotence": true
+ },
+ "started": "2026-10-11T16:57:15.750758+00:00",
+ "environment": {
+  "host": {
+   "platform": "Windows-11-10.0.26200-SP0",
+   "processor": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+   "logical_cpus": 12
+  },
+  "docker": {
+   "server_version": "29.0.1",
+   "operating_system": "Docker Desktop",
+   "kernel": "6.6.87.2-microsoft-standard-WSL2",
+   "cpus": 8,
+   "memory_bytes": 12543283200
+  },
+  "wslconfig": "[wsl2]\nmemory=12GB\nprocessors=8\nlocalhostForwarding=true",
+  "power_plan": "GUID de plan de energ\ufffda: 6d85d030-6ba1-4165-bc5c-c6669384c801  (Acer)",
+  "ac_power": true,
+  "free_memory_gb": 4.71,
+  "git": {
+   "commit": "de27ef8a65fb66c2607bd1cbf5431017f42349bc",
+   "dirty": false
+  }
+ },
+ "min_host_free_memory_gb": 3.52,
+ "cpu_peak_percent": {
+  "generator": 0.61,
+  "meter": 4.18,
+  "bridge": 1.25,
+  "alarm-consumer": 8.76,
+  "schema-registry": 31.11,
+  "broker": 181.22,
+  "mosquitto": 3.54,
+  "zookeeper": 82.86
+ },
+ "cpusets": {
+  "broker": "0-1",
+  "mosquitto": "2",
+  "bridge": "3",
+  "alarm-consumer": "4",
+  "generator": "5",
+  "meter": "6",
+  "schema-registry": "7",
+  "zookeeper": "7"
+ },
+ "summaries": {
+  "e2e": {
+   "n": 1500,
+   "p50": 7.3,
+   "p95": 12.0,
+   "p99": null,
+   "min": 3.0556640625,
+   "max": 27.1572265625,
+   "underflow": 0
+  },
+  "ingest": {
+   "n": 1500,
+   "p50": 1.1,
+   "p95": 2.1,
+   "p99": null,
+   "min": -4,
+   "max": 6,
+   "underflow": 10
+  },
+  "produce_to_visible": {
+   "n": 1500,
+   "p50": 7.0,
+   "p95": 9.1,
+   "p99": null,
+   "min": 5.792236328125,
+   "max": 26.1572265625,
+   "underflow": 0
+  },
+  "alarm_e2e": {
+   "n": 300,
+   "p50": 35.0,
+   "p95": 51.0,
+   "p99": null,
+   "min": 12.717,
+   "max": 52.357,
+   "underflow": 0
+  },
+  "generator_late": {
+   "n": 1650,
+   "p50": 0.2,
+   "p95": 0.4,
+   "p99": null,
+   "min": 0.0,
+   "max": 1.6262531280517578,
+   "underflow": 0
+  },
+  "produce_to_ack": {
+   "n": 1500,
+   "p50": 6.0,
+   "p95": 7.9,
+   "p99": null,
+   "min": 5.57,
+   "max": 25.76,
+   "underflow": 0
+  }
+ },
+ "publishable": true,
+ "warmup_s": 30.0,
+ "measured_s": 300.0,
+ "t0_ms": 1791737879035,
+ "window": {
+  "start_ms": 1791737909035,
+  "end_ms": 1791738209035
+ },
+ "finished": "2026-10-11T17:03:30.517051+00:00",
+ "fetch_wait_max_ms": 5,
+ "lag_peak_s": 0.2,
+ "lag_slope_s_per_s": 1.0667223167702611e-05,
+ "valid": true,
+ "sustainable": null,
+ "generator_saturated": false,
+ "problems": [],
+ "thresholds": {
+  "p99_ms": 1000.0,
+  "max_lag_s": 1.0,
+  "max_lag_slope_per_s": 0.001,
+  "max_lost": 0,
+  "max_late_p99_ms": 5.0,
+  "max_late_max_ms": 100.0
+ },
+ "run_problems": []
+}

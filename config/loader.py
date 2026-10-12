@@ -181,11 +181,20 @@ class ThingsBoardConfig:
 
 
 @dataclass(frozen=True)
+class BridgeConfig:
+    # librdkafka settings for the bridge's producer (bridge.yaml), as written.
+    producer: Mapping[str, str | int | float | bool]
+    # The bridge watches Mosquitto's dropped-messages counter (bridge.yaml drop_monitor.enabled, DETENTE 3.3.h).
+    drop_monitor_enabled: bool = True
+
+
+@dataclass(frozen=True)
 class Config:
     telemetry: TelemetryConfig
     alarms: AlarmsConfig
     topics: TopicsConfig
     thingsboard: ThingsBoardConfig
+    bridge: BridgeConfig
 
 
 # --- validation helpers -----------------------------------------------------
@@ -507,8 +516,33 @@ def _parse_thingsboard(data: Mapping[str, Any]) -> ThingsBoardConfig:
     return ThingsBoardConfig(rate)
 
 
+# Set by the bridge itself; a value here would silently be overridden or would
+# break the bridge's logging, so it is refused.
+BRIDGE_MANAGED_PRODUCER_KEYS = frozenset({"bootstrap.servers", "metadata.broker.list", "client.id", "logger"})
+
+
+def _parse_bridge(data: Mapping[str, Any]) -> BridgeConfig:
+    w = "bridge.yaml"
+    _keys(data, w, {"producer"}, {"drop_monitor"})
+    producer = _mapping(data["producer"], f"{w}.producer")
+    settings: dict[str, str | int | float | bool] = {}
+    for key, value in producer.items():
+        kw = f"{w}.producer.{key}"
+        _str(key, f"{w}.producer")
+        if key in BRIDGE_MANAGED_PRODUCER_KEYS:
+            raise ConfigError(f"{kw}: set by the bridge itself, not configurable here")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ConfigError(f"{kw}: expected a finite number")
+        if not isinstance(value, (str, int, float, bool)) or value == "":
+            raise ConfigError(f"{kw}: expected a string, number or boolean")
+        settings[key] = value
+    drop_monitor = _mapping(_absent_as(data.get("drop_monitor"), {"enabled": True}), f"{w}.drop_monitor")
+    _keys(drop_monitor, f"{w}.drop_monitor", {"enabled"})
+    return BridgeConfig(_frozen(settings), _bool(drop_monitor["enabled"], f"{w}.drop_monitor.enabled"))
+
+
 def load_config(config_dir: Path | None = None, env: Mapping[str, str] | None = None) -> Config:
-    """Load, validate and cross-check telemetry.yaml, alarms.yaml, topics.yaml and thingsboard.yaml."""
+    """Load, validate and cross-check telemetry.yaml, alarms.yaml, topics.yaml, thingsboard.yaml and bridge.yaml."""
     config_dir = config_dir or CONFIG_DIR
     env = os.environ if env is None else env
     telemetry = _parse_telemetry(_read_yaml(config_dir / "telemetry.yaml"))
@@ -516,7 +550,187 @@ def load_config(config_dir: Path | None = None, env: Mapping[str, str] | None = 
     topics = _parse_topics(_read_yaml(config_dir / "topics.yaml"), env)
     _check_channels_in_schema(telemetry, topics.telemetry_raw)
     thingsboard = _parse_thingsboard(_read_yaml(config_dir / "thingsboard.yaml"))
-    return Config(telemetry, alarms, topics, thingsboard)
+    bridge = _parse_bridge(_read_yaml(config_dir / "bridge.yaml"))
+    return Config(telemetry, alarms, topics, thingsboard, bridge)
+
+
+# --- benchmark.yaml (Task 3.3) -------------------------------------------------
+#
+# Not part of Config: the pipeline's components never read it. The benchmark (bench/) loads it with
+# load_benchmark_config(), cross-checked against the pipeline configuration.
+
+BENCH_SERVICES = ("broker", "mosquitto", "bridge", "alarm-consumer", "generator", "meter", "schema-registry", "zookeeper")
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+
+@dataclass(frozen=True)
+class FaultPattern:
+    channel: str
+    high_value: float
+    normal_value: float
+    period_s: float
+    high_s: float
+
+
+@dataclass(frozen=True)
+class BenchmarkConfig:
+    require_ac_power: bool
+    min_host_free_memory_gb: float
+    monitor_interval_s: float
+    warmup_s: float
+    measured_s: float
+    drain_timeout_s: float
+    cooldown_s: float
+    trial_measured_s: float
+    trial_rate_per_s: float
+    latency_rates_per_s: tuple[float, ...]
+    latency_repetitions: int
+    ladder_per_s: tuple[float, ...]
+    repetitions_at_candidate: int
+    clones_per_asset: int
+    sensitivity_repetitions: int
+    calibration_generator_rates_per_s: tuple[float, ...]
+    calibration_generator_measured_s: float
+    calibration_meter_records: int
+    generator_max_inflight: int
+    max_late_p99_ms: float
+    max_late_max_ms: float
+    fault_pattern: FaultPattern
+    meter_fetch_wait_max_ms: int
+    criteria_p99_ms: float
+    criteria_max_lag_s: float
+    criteria_max_lag_slope_per_s: float
+    criteria_max_lost: int
+    max_client_core_fraction: float
+    cpusets: Mapping[str, str]
+    bridge_log_level_latency: str
+    bridge_log_level_throughput: str
+    bridge_log_level_sensitivity: str
+    bridge_linger_ms: float | None
+
+
+def _bool(value: Any, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{where}: expected true or false")
+    return value
+
+
+def _rates(value: Any, where: str) -> tuple[float, ...]:
+    if not isinstance(value, list) or not value:
+        raise ConfigError(f"{where}: expected a non-empty list")
+    rates = tuple(_num(v, f"{where}[{i}]", positive=True) for i, v in enumerate(value))
+    if list(rates) != sorted(set(rates)):
+        raise ConfigError(f"{where}: must be strictly increasing")
+    return rates
+
+
+def _cpuset(value: Any, where: str) -> str:
+    text = _str(value, where)
+    for part in text.split(","):
+        bounds = part.split("-")
+        if not (1 <= len(bounds) <= 2 and all(b.isdigit() for b in bounds)) or int(bounds[0]) > int(bounds[-1]):
+            raise ConfigError(f"{where}: expected a cpuset such as \"3\" or \"0-1\"")
+    return text
+
+
+def load_benchmark_config(config_dir: Path | None = None, config: Config | None = None) -> BenchmarkConfig:
+    """Load and validate benchmark.yaml, cross-checked against the pipeline configuration."""
+    config_dir = config_dir or CONFIG_DIR
+    config = config or load_config(config_dir, env={})
+    w = "benchmark.yaml"
+    data = _read_yaml(config_dir / w)
+    _keys(data, w, {"environment", "run", "latency", "throughput", "calibration", "generator", "meter", "criteria", "cpu",
+                    "bridge"})
+
+    env = _mapping(data["environment"], f"{w}.environment")
+    _keys(env, f"{w}.environment", {"require_ac_power", "min_host_free_memory_gb", "monitor_interval_s"})
+    run = _mapping(data["run"], f"{w}.run")
+    _keys(run, f"{w}.run", {"warmup_s", "measured_s", "drain_timeout_s", "cooldown_s", "trial"})
+    trial = _mapping(run["trial"], f"{w}.run.trial")
+    _keys(trial, f"{w}.run.trial", {"measured_s", "rate_per_s"})
+    lat = _mapping(data["latency"], f"{w}.latency")
+    _keys(lat, f"{w}.latency", {"rates_per_s", "repetitions"})
+    thr = _mapping(data["throughput"], f"{w}.throughput")
+    _keys(thr, f"{w}.throughput", {"ladder_per_s", "repetitions_at_candidate", "clones_per_asset", "sensitivity_repetitions"})
+    cal = _mapping(data["calibration"], f"{w}.calibration")
+    _keys(cal, f"{w}.calibration", {"generator_rates_per_s", "generator_measured_s", "meter_records"})
+    gen = _mapping(data["generator"], f"{w}.generator")
+    _keys(gen, f"{w}.generator", {"max_inflight", "max_late_p99_ms", "max_late_max_ms", "fault_pattern"})
+    fp = _mapping(gen["fault_pattern"], f"{w}.generator.fault_pattern")
+    fw = f"{w}.generator.fault_pattern"
+    _keys(fp, fw, {"channel", "high_value", "normal_value", "period_s", "high_s"})
+    meter = _mapping(data["meter"], f"{w}.meter")
+    _keys(meter, f"{w}.meter", {"fetch_wait_max_ms"})
+    crit = _mapping(data["criteria"], f"{w}.criteria")
+    _keys(crit, f"{w}.criteria", {"p99_ms", "max_lag_s", "max_lag_slope_per_s", "max_lost"})
+    cpu = _mapping(data["cpu"], f"{w}.cpu")
+    _keys(cpu, f"{w}.cpu", {"max_client_core_fraction", "cpusets"})
+    bridge = _mapping(data["bridge"], f"{w}.bridge")
+    _keys(bridge, f"{w}.bridge", {"log_level_latency", "log_level_throughput", "log_level_sensitivity", "linger_ms"})
+
+    channel = _str(fp["channel"], f"{fw}.channel")
+    if channel not in config.telemetry.channels:
+        raise ConfigError(f"{fw}.channel: unknown channel {channel!r}")
+    pattern = FaultPattern(channel,
+                           _num(fp["high_value"], f"{fw}.high_value"),
+                           _num(fp["normal_value"], f"{fw}.normal_value"),
+                           _num(fp["period_s"], f"{fw}.period_s", positive=True),
+                           _num(fp["high_s"], f"{fw}.high_s", positive=True))
+    if pattern.high_s >= pattern.period_s:
+        raise ConfigError(f"{fw}.high_s: must be shorter than period_s")
+    if pattern.high_value <= pattern.normal_value:
+        raise ConfigError(f"{fw}.high_value: must be above normal_value")
+
+    cpusets_raw = _mapping(cpu["cpusets"], f"{w}.cpu.cpusets")
+    unknown = cpusets_raw.keys() - set(BENCH_SERVICES)
+    if unknown:
+        raise ConfigError(f"{w}.cpu.cpusets: unknown service(s) {sorted(unknown)}")
+    cpusets = {k: _cpuset(v, f"{w}.cpu.cpusets.{k}") for k, v in cpusets_raw.items()}
+
+    levels = {}
+    for key in ("log_level_latency", "log_level_throughput", "log_level_sensitivity"):
+        if bridge[key] not in LOG_LEVELS:
+            raise ConfigError(f"{w}.bridge.{key}: must be one of {list(LOG_LEVELS)}")
+        levels[key] = bridge[key]
+    linger = None if bridge["linger_ms"] is None else _num(bridge["linger_ms"], f"{w}.bridge.linger_ms", min_=0)
+
+    measured = _num(run["measured_s"], f"{w}.run.measured_s", positive=True)
+    return BenchmarkConfig(
+        require_ac_power=_bool(env["require_ac_power"], f"{w}.environment.require_ac_power"),
+        min_host_free_memory_gb=_num(env["min_host_free_memory_gb"], f"{w}.environment.min_host_free_memory_gb", min_=0),
+        monitor_interval_s=_num(env["monitor_interval_s"], f"{w}.environment.monitor_interval_s", positive=True),
+        warmup_s=_num(run["warmup_s"], f"{w}.run.warmup_s", min_=0),
+        measured_s=measured,
+        drain_timeout_s=_num(run["drain_timeout_s"], f"{w}.run.drain_timeout_s", positive=True),
+        cooldown_s=_num(run["cooldown_s"], f"{w}.run.cooldown_s", min_=0),
+        trial_measured_s=_num(trial["measured_s"], f"{w}.run.trial.measured_s", positive=True),
+        trial_rate_per_s=_num(trial["rate_per_s"], f"{w}.run.trial.rate_per_s", positive=True),
+        latency_rates_per_s=_rates(lat["rates_per_s"], f"{w}.latency.rates_per_s"),
+        latency_repetitions=_int(lat["repetitions"], f"{w}.latency.repetitions", min_=1),
+        ladder_per_s=_rates(thr["ladder_per_s"], f"{w}.throughput.ladder_per_s"),
+        repetitions_at_candidate=_int(thr["repetitions_at_candidate"], f"{w}.throughput.repetitions_at_candidate", min_=1),
+        clones_per_asset=_int(thr["clones_per_asset"], f"{w}.throughput.clones_per_asset", min_=1),
+        sensitivity_repetitions=_int(thr["sensitivity_repetitions"], f"{w}.throughput.sensitivity_repetitions", min_=0),
+        calibration_generator_rates_per_s=_rates(cal["generator_rates_per_s"], f"{w}.calibration.generator_rates_per_s"),
+        calibration_generator_measured_s=_num(cal["generator_measured_s"], f"{w}.calibration.generator_measured_s",
+                                              positive=True),
+        calibration_meter_records=_int(cal["meter_records"], f"{w}.calibration.meter_records", min_=1),
+        generator_max_inflight=_int(gen["max_inflight"], f"{w}.generator.max_inflight", min_=1),
+        max_late_p99_ms=_num(gen["max_late_p99_ms"], f"{w}.generator.max_late_p99_ms", positive=True),
+        max_late_max_ms=_num(gen["max_late_max_ms"], f"{w}.generator.max_late_max_ms", positive=True),
+        fault_pattern=pattern,
+        meter_fetch_wait_max_ms=_int(meter["fetch_wait_max_ms"], f"{w}.meter.fetch_wait_max_ms", min_=0),
+        criteria_p99_ms=_num(crit["p99_ms"], f"{w}.criteria.p99_ms", positive=True),
+        criteria_max_lag_s=_num(crit["max_lag_s"], f"{w}.criteria.max_lag_s", min_=0),
+        criteria_max_lag_slope_per_s=_num(crit["max_lag_slope_per_s"], f"{w}.criteria.max_lag_slope_per_s"),
+        criteria_max_lost=_int(crit["max_lost"], f"{w}.criteria.max_lost", min_=0),
+        max_client_core_fraction=_num(cpu["max_client_core_fraction"], f"{w}.cpu.max_client_core_fraction", positive=True),
+        cpusets=_frozen(cpusets),
+        bridge_log_level_latency=levels["log_level_latency"],
+        bridge_log_level_throughput=levels["log_level_throughput"],
+        bridge_log_level_sensitivity=levels["log_level_sensitivity"],
+        bridge_linger_ms=linger,
+    )
 
 
 def _check_channels_in_schema(telemetry: TelemetryConfig, topic: KafkaTopic) -> None:
