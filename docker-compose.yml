@@ -103,7 +103,6 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
       # Topics are created explicitly from config/topics.yaml by `make up`;
       # a typo in a topic name must fail, not create a new topic.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
@@ -111,6 +110,18 @@ services:
       # this stack. Telemetry to Confluent is already off in cp-server 6.1.1
       # (confluent.telemetry.enabled = false in the broker's startup config).
       CONFLUENT_METRICS_ENABLE: "false"
+      # cp-server features this stack does not use (DETENTE 3.3.i). That
+      # setting does not stop the telemetry reporter's local exporter, which
+      # cp-server adds by default (confluent.reporters.telemetry.auto.enable)
+      # and which creates _confluent-telemetry-metrics and a consumer group;
+      # Self-Balancing (confluent.balancer.enable) has nothing to balance on
+      # one broker and creates three _confluent_balancer_* topics. Nothing in
+      # this repository reads those topics. Measured idle on 2026-10-12, 300 s
+      # each: four internal topics and the sampler group no longer created,
+      # broker mean CPU 19.6 -> 15.8 % of a core, samples >= 1.2 cores 8 -> 5
+      # (with the old JVM healthcheck in both).
+      KAFKA_CONFLUENT_BALANCER_ENABLE: "false"
+      KAFKA_CONFLUENT_REPORTERS_TELEMETRY_AUTO_ENABLE: "false"
     tmpfs:
       - /var/lib/kafka/data:uid=1000,gid=1000
       - /etc/kafka/secrets:uid=1000,gid=1000
