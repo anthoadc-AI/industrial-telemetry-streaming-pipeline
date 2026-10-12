@@ -245,3 +245,21 @@ Ningún cambio en los umbrales de `config/benchmark.yaml`. Ninguna corrida hasta
 4. cp-server: ¿se adoptan los dos ajustes, y antes de volver a medir?
 5. Latencia: ¿basta con 1 corrida de control a 50 msg/s si cp-server no cambia?
 6. El caso de desbordamiento visible (65 000 mensajes): ¿en CI, o solo en `test-integration-full`?
+
+## 10. Medido después de la aprobación (DETENTE 3.3.i)
+
+Esta sección se añadió tras implementar y medir; las secciones 1 a 9 son la propuesta tal como se aprobó. Todas las mediciones en reposo usan el mismo método: stack core recreado y aprovisionado, 300 s sin carga, `docker stats` del arnés (una muestra cada ~2 s), 120 s de enfriamiento entre variantes, con corriente alterna y sin contenedores ajenos. Una sola pareja por comparación, siempre en el mismo orden: confianza baja en diferencias pequeñas.
+
+| Cambio (commit) | Medida | Antes | Después |
+|---|---|---|---|
+| Cola de Mosquitto 60 000 / 25 MiB (`baef69b`) | Test de pausa, 5 000 mensajes con el bridge congelado | 1 040 en Kafka, 3 960 descartados (control) | 5 000 de 5 000, 0 descartados |
+| Ídem | Desbordamiento, 65 000 mensajes con el bridge congelado | — | 60 040 en Kafka, 4 960 descartados = faltantes = registrados por el bridge; Mosquitto con 47,5 MiB en el límite |
+| Funciones de cp-server desactivadas (`7825d3e`), con el healthcheck JVM en ambas variantes | CPU media del broker en reposo (% de un núcleo) | 19,6 | 15,8 |
+| Ídem | Muestras ≥ 1,2 núcleos / ≥ 50 % | 8 / 20 | 5 / 16 |
+| Ídem | Tópicos internos `_confluent*` creados; rebalanceos | 5; 2 | 1 (`_confluent-license`); 1 |
+| Healthcheck del broker sin JVM (`cd711fc`), con las funciones de cp-server activas en ambas variantes | CPU media del broker en reposo | 18,0 | 5,9 |
+| Ídem | Muestras ≥ 1,2 núcleos / ≥ 50 % | 4 / 17 (15 de las 17 coinciden con una ejecución del healthcheck) | 1 / 1 (sin healthcheck cerca) |
+| Ídem | Duración de cada comprobación (mediana) | 1 329 ms (`cub kafka-ready`, una JVM) | 67 ms (`nc -z`) |
+| Healthcheck de ZooKeeper sin JVM (`cd711fc`) | ZooKeeper, muestras ≥ 50 % de un núcleo, sin cambiar su healthcheck | 11 en cada variante, 21 de 22 coinciden con una ejecución de `cub zk-ready` (0,75 s cada una) | No medido en reposo tras el cambio; `srvr` tarda 12 ms frente a 0,67 s de `zk-ready` (contenedor aparte) |
+
+**Toda corrida hecha hasta ahora llevó la carga del healthcheck JVM.** El override de compose del benchmark fija las CPU de cada servicio pero no toca los healthchecks (comprobado en `compose.override.yml` de las corridas). En cada corrida de los bloques 1 a 4 y en los diagnósticos, Docker lanzó cada ~11 s una JVM de `cub kafka-ready` dentro del contenedor del broker, en sus dos vCPU fijadas (0-1), y una de `cub zk-ready` en la vCPU 7, compartida por ZooKeeper y Schema Registry. Inferencia, no medida con carga: parte de los picos de CPU del broker vistos en el bloque 3 y en el diagnóstico, y quizá parte de la cola de `produce_to_ack`, vienen de ahí. La serie de nueva medición sobre la configuración final es la que lo dirá.
