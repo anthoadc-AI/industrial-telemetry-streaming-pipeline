@@ -266,7 +266,38 @@ def mosquitto_summary(samples: list[tuple[float, str, float]]) -> dict:
                        for k in ("received", "sent", "dropped")}})
         last = row
     first_drop = next((r["wall_s"] for r in out if r["dropped_delta"]), None)
-    return {"updates": len(out), "dropped_total": last.get("dropped", 0), "stored_max": max(
+    first_dropped = next((rows[s]["dropped"] for s in sorted(rows) if "dropped" in rows[s]), None)
+    return {"updates": len(out), "dropped_total": last.get("dropped", 0),
+            # The counter is cumulative since Mosquitto started; its first sample (retained, sent on subscribing)
+            # is the baseline (DETENTE 3.3.h).
+            "dropped_during_run": last["dropped"] - first_dropped if first_dropped is not None else None,
+            "stored_max": max(
                 (r["stored"] for r in out if r["stored"] is not None), default=None),
             "first_update_with_drops_s": first_drop, "intervals": out}
+
+
+def mosquitto_problems(mosquitto: dict | None) -> list[str]:
+    """A run is invalid when Mosquitto dropped messages during it (owner, DETENTE 3.3.h): its own counter, broker-wide,
+    from the manifest's "mosquitto" summary. Runs made before the summary existed have none and are not judged on it;
+    those before dropped_during_run existed fall back to dropped_total, the same figure since the stack (and with it
+    Mosquitto, whose counter starts at 0) is recreated for every run."""
+    if not mosquitto:
+        return []
+    dropped = mosquitto.get("dropped_during_run", mosquitto.get("dropped_total"))
+    return [f"Mosquitto dropped {dropped:g} message(s) ($SYS, broker-wide)"] if dropped else []
+
+
+# Harness revisions in the order they were made: E2 counts the runs of the latest one at the candidate step, and
+# manifests before the 3.3.f change carry none (""). A revision missing from this list is an error, never "latest".
+HARNESS_REVISIONS = ("", "after the 3.3.f harness change", "after the 3.3.h product fix")
+
+
+def latest_revision(revisions) -> str:
+    """The latest of the given harness revisions, by HARNESS_REVISIONS; "" when there are none."""
+    order = []
+    for revision in revisions:
+        if (revision or "") not in HARNESS_REVISIONS:
+            raise ValueError(f"unknown harness revision {revision!r}; add it to bench.analysis.HARNESS_REVISIONS")
+        order.append(HARNESS_REVISIONS.index(revision or ""))
+    return HARNESS_REVISIONS[max(order)] if order else ""
 

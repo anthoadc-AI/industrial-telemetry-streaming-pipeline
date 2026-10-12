@@ -68,8 +68,9 @@ PY = sys.executable
 BOOTSTRAP = "localhost:9092"
 T0_LEAD_S = 8.0
 # Every manifest records which harness rules produced it (results are never re-run under new rules, only
-# re-evaluated by bench/report.py from their stored data).
-HARNESS_REVISION = "after the 3.3.f harness change"
+# re-evaluated by bench/report.py from their stored data). DETENTE 3.3.h changed the product (Mosquitto's queue, the
+# bridge's drop monitor): runs from then on are labelled with it. The order is bench.analysis.HARNESS_REVISIONS.
+HARNESS_REVISION = analysis.HARNESS_REVISIONS[-1]
 
 
 # --- environment (host side) -----------------------------------------------------------
@@ -431,7 +432,16 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
     _, cpu_flags = analysis.cpu_problems(r.cpu.samples, bench.max_client_core_fraction)
     lag = analysis.lag_series(samples, window["start_ms"], window["end_ms"])
     thresholds = thresholds_of(bench)
-    all_problems = r.env_problems + integrity_problems + cpu_flags
+    # Mosquitto's own record (owner, after the E2 loss): its $SYS counters and its drop notices, against what is
+    # missing from telemetry.raw. A drop invalidates the run (DETENTE 3.3.h).
+    with open(r.dir / "mosquitto_sys.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["wall_ms", "counter", "value"])
+        w.writerows([(round(t), name, value) for t, name, value in mosquitto_sys.samples])
+    mosquitto = {**analysis.mosquitto_summary(mosquitto_sys.samples),
+                 "drop_notices": analysis.mosquitto_drop_notices(logs["mosquitto"]),
+                 "missing_from_telemetry_raw": generator["sent"] - raw_new}
+    all_problems = r.env_problems + integrity_problems + cpu_flags + analysis.mosquitto_problems(mosquitto)
     verdict = criteria.evaluate(analysis.run_input(rate, meter, generator, lag, all_problems), thresholds)
     # D8 (sustainable or not) applies to throughput runs only; at latency rates one message is a large share of a
     # second, so the lag slope is quantisation noise. Other runs report validity alone.
@@ -456,15 +466,6 @@ def execute(bench: BenchmarkConfig, mode: str, rate: float, repetition: int, tri
         w.writerows(clock_samples)
     negatives = meter.get("negatives", [])
     clock = analysis.clock_quality(clock_samples, [n[0] for n in negatives])
-    # Mosquitto's own record (owner, after the E2 loss): its $SYS counters and its drop notices, against what is
-    # missing from telemetry.raw.
-    with open(r.dir / "mosquitto_sys.csv", "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["wall_ms", "counter", "value"])
-        w.writerows([(round(t), name, value) for t, name, value in mosquitto_sys.samples])
-    mosquitto = {**analysis.mosquitto_summary(mosquitto_sys.samples),
-                 "drop_notices": analysis.mosquitto_drop_notices(logs["mosquitto"]),
-                 "missing_from_telemetry_raw": generator["sent"] - raw_new}
     r.write({"publishable": not trial and not diagnostic and verdict.valid, "warmup_s": bench.warmup_s,
              "measured_s": measured_s,
              "t0_ms": t0_ms, "window": window, "finished": finished.isoformat(),

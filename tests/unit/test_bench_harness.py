@@ -369,8 +369,8 @@ def test_report_clock_negatives_and_repetitions(tmp_path):
     assert ("| 0 / 1 / - / - / - | 4.8 ms back (1 steps), drift -4.8 ms; 1 of 1 negatives at a backward step "
             "(by chance 1) |") in text  # recomputed from clock.csv, not read from the manifest
     assert "| 0 / - / - / - / - | not sampled |" in text  # runs before DETENTE 3.3.f
-    # Median and range across the three repetitions, whole milliseconds rounded up: 7.2, 7.6, 8.4 -> 8 (8-9).
-    assert "| latency | 50 | INFO | 3 | F1 e2e | 8 (8-9) | 8 (8-9) | - | 200 |" in text  # n=200: no p99
+    # Median and range across the three repetitions, whole milliseconds rounded up: 7.2, 7.6, 8.4 -> 8 (8-9); n=200: no p99.
+    assert "| latency | 50 | INFO | before the 3.3.f harness change | 3 | F1 e2e | 8 (8-9) | 8 (8-9) | - | 200 |" in text
     assert report.spread([1.0, None]) == "-" and report.ms(None) == "-" and report.ms(7.0) == "7"
 
 
@@ -430,8 +430,12 @@ def test_mosquitto_summary_turns_cumulative_counters_into_increases():
     assert s["intervals"][0] == {"wall_s": 0, "stored": 55, "received_delta": None, "sent_delta": None, "dropped_delta": None}
     assert s["intervals"][2] == {"wall_s": 20, "stored": 1_096, "received_delta": 30_000, "sent_delta": 28_000,
                                  "dropped_delta": 1_960}
-    assert analysis.mosquitto_summary([]) == {"updates": 0, "dropped_total": 0, "stored_max": None,
-                                              "first_update_with_drops_s": None, "intervals": []}
+    assert s["dropped_during_run"] == 1_960
+    assert analysis.mosquitto_summary([]) == {"updates": 0, "dropped_total": 0, "dropped_during_run": None,
+                                              "stored_max": None, "first_update_with_drops_s": None, "intervals": []}
+    # DETENTE 3.3.h: the first (retained) value is the baseline, so drops before the run are not the run's.
+    later = analysis.mosquitto_summary([(0, "dropped", 500), (10_000, "dropped", 500), (20_000, "dropped", 520)])
+    assert (later["dropped_total"], later["dropped_during_run"]) == (520, 20)
 
 
 def test_a_diagnostic_run_is_listed_but_never_publishable_nor_on_the_ladder(tmp_path):
@@ -444,3 +448,74 @@ def test_a_diagnostic_run_is_listed_but_never_publishable_nor_on_the_ladder(tmp_
     text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 3000.0), 0.8, 5)
     assert "| b-3000-diag | throughput (diagnostic) | 3000 | INFO | yes | valid yes | no |" in text
     assert "- 3000/s" not in text and "The ladder is not complete: next step 3000/s." in text
+
+
+def test_mosquitto_drops_invalidate_a_run():
+    """Owner, DETENTE 3.3.h: zero drops is part of every run's validity; older manifests fall back to dropped_total
+    (the stack, Mosquitto with it, is recreated per run) or, without a summary, are not judged on it."""
+    assert analysis.mosquitto_problems({"dropped_total": 9, "dropped_during_run": 7}) == [
+        "Mosquitto dropped 7 message(s) ($SYS, broker-wide)"]
+    assert analysis.mosquitto_problems({"dropped_total": 61140}) == ["Mosquitto dropped 61140 message(s) ($SYS, broker-wide)"]
+    assert analysis.mosquitto_problems({"dropped_total": 3, "dropped_during_run": 0}) == []
+    assert analysis.mosquitto_problems({"dropped_total": 0}) == []
+    assert analysis.mosquitto_problems(None) == []
+
+
+def test_a_run_with_mosquitto_drops_is_invalid_in_the_report(tmp_path):
+    write_run(tmp_path, "a-1000", "throughput", 1000, 20.0)
+    m = json.loads((tmp_path / "a-1000" / "manifest.json").read_text(encoding="utf-8"))
+    m["mosquitto"] = {"dropped_total": 12, "dropped_during_run": 12}
+    (tmp_path / "a-1000" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    [run] = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    assert "Mosquitto dropped 12 message(s) ($SYS, broker-wide)" in report.run_problems(run["manifest"], 0.8)
+    v = criteria.evaluate(report.run_input(run), criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0))
+    assert not v.valid
+    m["run_problems"] = ["Mosquitto dropped 12 message(s) ($SYS, broker-wide)"]  # judged by the harness already
+    assert report.run_problems(m, 0.8).count("Mosquitto dropped 12 message(s) ($SYS, broker-wide)") == 1
+
+
+def test_harness_revisions_are_ordered_explicitly():
+    """DETENTE 3.3.h: the latest revision by the declared order, not by alphabet; an unknown one is an error."""
+    assert harness.HARNESS_REVISION == "after the 3.3.h product fix"
+    assert analysis.latest_revision([None, "after the 3.3.h product fix", "after the 3.3.f harness change"]) == \
+        "after the 3.3.h product fix"
+    assert analysis.latest_revision([None, ""]) == ""
+    assert analysis.latest_revision([]) == ""
+    with pytest.raises(ValueError, match="unknown harness revision 'after the 3.3.z typo'"):
+        analysis.latest_revision(["after the 3.3.z typo"])
+
+
+def test_e2_counts_the_runs_after_the_product_fix(tmp_path):
+    """Owner, DETENTE 3.3.h: the E2 runs at 2000 made before the product fix stay, labelled, and are not counted."""
+    write_run(tmp_path, "a-1000", "throughput", 1000, 20.0)
+    for i, revision in enumerate(["after the 3.3.f harness change"] * 5 + ["after the 3.3.h product fix"] * 2):
+        write_run(tmp_path, f"b-2000-{i}", "throughput", 2000, 40.0, repetition=i + 1)
+        m = json.loads((tmp_path / f"b-2000-{i}" / "manifest.json").read_text(encoding="utf-8"))
+        m["harness_revision"] = revision
+        (tmp_path / f"b-2000-{i}" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    write_run(tmp_path, "c-3000", "throughput", 3000, 400.0,
+              problems=["meter saw 1 distinct of 2 sent, 1 gap(s)", "CPU-bound instrument(s): generator at 98 % of a core"])
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 2000.0, 3000.0), 0.8, 5)
+    assert "Candidate: 2000/s; runs 2 of the 5 E2 needs" in text
+
+
+
+def test_the_report_names_the_runs_made_before_the_product_fix(tmp_path):
+    """Owner, DETENTE 3.3.h: repetitions are not pooled across the product fix, and the report says the latency block
+    predates the queue change once runs after it exist."""
+    for i in range(2):
+        write_run(tmp_path, f"a-lat-{i}", "latency", 50, 7.0, repetition=i + 1)
+    write_run(tmp_path, "b-lat-new", "latency", 50, 9.0)
+    m = json.loads((tmp_path / "b-lat-new" / "manifest.json").read_text(encoding="utf-8"))
+    m["harness_revision"] = "after the 3.3.h product fix"
+    (tmp_path / "b-lat-new" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+    runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
+    text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (), 0.8, 5)
+    assert "| latency | 50 | INFO | before the 3.3.f harness change | 2 | F1 e2e |" in text
+    assert "after the 3.3.h product fix | 1 |" not in text  # one run alone is not a repetition group
+    assert "## Runs made before the product fix (DETENTE 3.3.h)" in text
+    assert "These runs measured the product before that change: latency 50/s: 2." in text
+    assert "the latency block predates the queue change" in text
+    assert report.product_fix_note([r for r in runs if r["dir"].startswith("a-")]) == []  # no run after the fix yet
+    assert report.product_fix_note([r for r in runs if r["dir"].startswith("b-")]) == []  # none before it

@@ -78,6 +78,9 @@ def run_problems(m: dict, max_core_fraction: float) -> list[str]:
     problems = analysis.without_system_under_test_cpu(list(m.get("run_problems", [])))
     if not any(p.startswith("CPU-bound instrument(s)") for p in problems):
         problems += analysis.cpu_problems([(0, m.get("cpu_peak_percent") or {})], max_core_fraction)[1]
+    # Mosquitto's drops (DETENTE 3.3.h), for the runs recorded before the harness judged them.
+    if not any(p.startswith("Mosquitto dropped") for p in problems):
+        problems += analysis.mosquitto_problems(m.get("mosquitto"))
     return problems
 
 
@@ -144,20 +147,51 @@ def spread(values: list[float]) -> str:
     return f"{ms(statistics.median(values))} ({ms(min(values))}-{ms(max(values))})"
 
 
+def revision_name(revision: str | None) -> str:
+    return revision or "before the 3.3.f harness change"
+
+
 def repetitions(groups: dict[tuple, list[dict]]) -> list[str]:
-    """Per group of repetitions: each figure's p50, p95 and p99 as median (range) across them, and n per run."""
-    lines = ["| Mode | Rate/s | Bridge log | Runs | Figure | p50 | p95 | p99 | n per run |",
-             "|---|---|---|---|---|---|---|---|---|"]
-    for (mode, rate, level), runs in sorted(groups.items(), key=lambda g: (g[0][0], g[0][1], g[0][2])):
+    """Per group of repetitions (one harness revision each: runs are not pooled across a change of the harness or of
+    the product, DETENTE 3.3.h): each figure's p50, p95 and p99 as median (range) across them, and n per run."""
+    lines = ["| Mode | Rate/s | Bridge log | Revision | Runs | Figure | p50 | p95 | p99 | n per run |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
+    order = analysis.HARNESS_REVISIONS
+    for (mode, rate, level, rev), runs in sorted(groups.items(), key=lambda g: (g[0][0], g[0][1], g[0][2],
+                                                                               order.index(g[0][3]))):
         for key, name in FIGURES:
             sums = [r["hists"][key].summary() for r in runs if key in r["hists"] and r["hists"][key].total]
             if len(sums) != len(runs):
                 continue
             ns = sorted({x["n"] for x in sums})
-            lines.append(f"| {mode} | {rate:g} | {level} | {len(runs)} | {name} | "
+            lines.append(f"| {mode} | {rate:g} | {level} | {revision_name(rev)} | {len(runs)} | {name} | "
                          + " | ".join(spread([x[q] for x in sums]) for q in ("p50", "p95", "p99"))
                          + f" | {ns[0]}" + (f"-{ns[-1]}" if len(ns) > 1 else "") + " |")
     return lines
+
+
+PRODUCT_FIX = "after the 3.3.h product fix"
+
+
+def product_fix_note(pipeline: list[dict]) -> list[str]:
+    """Owner, DETENTE 3.3.h: once runs exist after the product fix, the report says which figures predate it."""
+    revisions = [r["manifest"].get("harness_revision") for r in pipeline]
+    if analysis.latest_revision(revisions) != PRODUCT_FIX:
+        return []
+    before: dict[tuple, int] = {}
+    for r in pipeline:
+        m = r["manifest"]
+        if not m["trial"] and not m.get("diagnostic") and (m.get("harness_revision") or "") != PRODUCT_FIX:
+            key = (m["mode"] + (" (sensitivity)" if m.get("sensitivity") else ""), m["rate_per_s"])
+            before[key] = before.get(key, 0) + 1
+    if not before:
+        return []
+    listed = "; ".join(f"{mode} {rate:g}/s: {n}" for (mode, rate), n in sorted(before.items()))
+    return ["", "## Runs made before the product fix (DETENTE 3.3.h)", "",
+            "The product changed at DETENTE 3.3.h: Mosquitto's queue per client went from its default (about 1040 "
+            "messages) to 60000 messages / 25 MiB, and the bridge watches Mosquitto's dropped counter on a connection "
+            f"of its own. These runs measured the product before that change: {listed}. In particular the latency block "
+            "predates the queue change; at its rates the queue stayed at its baseline."]
 
 
 def environment_problems(m: dict) -> list[str]:
@@ -258,10 +292,12 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     for run in pipeline:
         m = run["manifest"]
         if not m["trial"] and not m.get("diagnostic") and criteria.evaluate(run_input(run, max_core_fraction), t).valid:
-            groups.setdefault((m["mode"], m["rate_per_s"], m.get("bridge_log_level", "-")), []).append(run)
+            groups.setdefault((m["mode"], m["rate_per_s"], m.get("bridge_log_level", "-"),
+                               m.get("harness_revision") or ""), []).append(run)
     repeated = {k: v for k, v in groups.items() if len(v) > 1}
     if repeated:
         lines += ["", "## Repetitions (median and range across valid runs, whole ms)", ""] + repetitions(repeated)
+    lines += product_fix_note(pipeline)
 
     headline = [r for r in pipeline if r["manifest"]["mode"] == "throughput" and not r["manifest"]["trial"]
                 and not r["manifest"].get("diagnostic")
@@ -293,7 +329,7 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     # E2 counts the runs of one harness revision, the latest at that step: runs made before a harness change are
     # labelled and not mixed with those made after it (briefing, STEP 2).
     at_candidate = [r for r in headline if r["manifest"]["rate_per_s"] == result.max_sustainable_rate]
-    latest = max((r["manifest"].get("harness_revision") or "" for r in at_candidate), default="")
+    latest = analysis.latest_revision(r["manifest"].get("harness_revision") for r in at_candidate)
     reps = [run_input(r, max_core_fraction) for r in at_candidate if (r["manifest"].get("harness_revision") or "") == latest]
     ok, _ = criteria.confirmed(reps, t)
     # E2 (amendment E2, config throughput.repetitions_at_candidate): that many runs, every one valid and sustainable.
