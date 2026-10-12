@@ -289,7 +289,11 @@ def mosquitto_problems(mosquitto: dict | None) -> list[str]:
 
 # Harness revisions in the order they were made: E2 counts the runs of the latest one at the candidate step, and
 # manifests before the 3.3.f change carry none (""). A revision missing from this list is an error, never "latest".
-HARNESS_REVISIONS = ("", "after the 3.3.f harness change", "after the 3.3.h product fix")
+# The last one is the product as finally configured (owner, DETENTE 3.3.i): Mosquitto's queue and the bridge's drop
+# monitor (3.3.h), healthchecks without a JVM and the unused cp-server features off (3.3.i). No run was made between
+# 3.3.h and 3.3.i, so they share one label.
+HARNESS_REVISIONS = ("", "after the 3.3.f harness change", "final configuration (after 3.3.h and 3.3.i)")
+FINAL_CONFIGURATION = HARNESS_REVISIONS[-1]
 
 
 def latest_revision(revisions) -> str:

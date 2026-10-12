@@ -240,7 +240,8 @@ def test_report_renders_runs_ladder_and_recomputes_the_cut(tmp_path):
     runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
     t = criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0)
     text = report.render(runs, t, (250.0, 500.0, 1000.0, 2000.0))
-    assert "| a-trial | trial | 5 | INFO | yes | valid yes | no |" in text  # a trial is never publishable
+    # a trial is never publishable
+    assert "| a-trial | before the 3.3.f harness change | trial | 5 | INFO | yes | valid yes | no |" in text
     assert "- 1000/s: not sustainable - p99 not below 1000 ms" in text
     assert "Next: the intermediate step 750/s, between 500 and 1000" in text  # DETENTE 3.3.d
     assert "Candidate: 500/s; runs 1 of the 5 E2 needs; not yet confirmed (E2)." in text
@@ -346,8 +347,9 @@ def test_report_reevaluates_the_cpu_rule_and_shows_both_verdicts(tmp_path):
     runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
     t = criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0)
     text = report.render(runs, t, (1000.0, 2000.0, 3000.0), 0.8, 5)
-    assert "| b-2000 | throughput | 2000 | INFO | yes | valid no, sustainable no |" in text
-    assert "| c-3000 | throughput | 3000 | INFO | no |" in text and "CPU-bound instrument(s): generator at 85 %" in text
+    assert "| b-2000 | before the 3.3.f harness change | throughput | 2000 | INFO | yes | valid no, sustainable no |" in text
+    assert "| c-3000 | before the 3.3.f harness change | throughput | 3000 | INFO | no |" in text
+    assert "CPU-bound instrument(s): generator at 85 %" in text
     assert "- 2000/s: sustainable" in text and "- 3000/s: not sustainable" in text
     assert report.run_problems({"run_problems": ["CPU-bound instrument(s): meter at 90 % of a core"],
                                 "cpu_peak_percent": {"meter": 90.0}}, 0.8) == ["CPU-bound instrument(s): meter at 90 % of a core"]
@@ -446,7 +448,8 @@ def test_a_diagnostic_run_is_listed_but_never_publishable_nor_on_the_ladder(tmp_
     (tmp_path / "b-3000-diag" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
     runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
     text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (1000.0, 3000.0), 0.8, 5)
-    assert "| b-3000-diag | throughput (diagnostic) | 3000 | INFO | yes | valid yes | no |" in text
+    assert ("| b-3000-diag | before the 3.3.f harness change | throughput (diagnostic) | 3000 | INFO | yes | valid yes | no |"
+            in text)
     assert "- 3000/s" not in text and "The ladder is not complete: next step 3000/s." in text
 
 
@@ -476,9 +479,9 @@ def test_a_run_with_mosquitto_drops_is_invalid_in_the_report(tmp_path):
 
 def test_harness_revisions_are_ordered_explicitly():
     """DETENTE 3.3.h: the latest revision by the declared order, not by alphabet; an unknown one is an error."""
-    assert harness.HARNESS_REVISION == "after the 3.3.h product fix"
-    assert analysis.latest_revision([None, "after the 3.3.h product fix", "after the 3.3.f harness change"]) == \
-        "after the 3.3.h product fix"
+    assert harness.HARNESS_REVISION == "final configuration (after 3.3.h and 3.3.i)"
+    assert analysis.latest_revision([None, "final configuration (after 3.3.h and 3.3.i)", "after the 3.3.f harness change"]) == \
+        "final configuration (after 3.3.h and 3.3.i)"
     assert analysis.latest_revision([None, ""]) == ""
     assert analysis.latest_revision([]) == ""
     with pytest.raises(ValueError, match="unknown harness revision 'after the 3.3.z typo'"):
@@ -488,7 +491,7 @@ def test_harness_revisions_are_ordered_explicitly():
 def test_e2_counts_the_runs_after_the_product_fix(tmp_path):
     """Owner, DETENTE 3.3.h: the E2 runs at 2000 made before the product fix stay, labelled, and are not counted."""
     write_run(tmp_path, "a-1000", "throughput", 1000, 20.0)
-    for i, revision in enumerate(["after the 3.3.f harness change"] * 5 + ["after the 3.3.h product fix"] * 2):
+    for i, revision in enumerate(["after the 3.3.f harness change"] * 5 + ["final configuration (after 3.3.h and 3.3.i)"] * 2):
         write_run(tmp_path, f"b-2000-{i}", "throughput", 2000, 40.0, repetition=i + 1)
         m = json.loads((tmp_path / f"b-2000-{i}" / "manifest.json").read_text(encoding="utf-8"))
         m["harness_revision"] = revision
@@ -501,21 +504,27 @@ def test_e2_counts_the_runs_after_the_product_fix(tmp_path):
 
 
 
-def test_the_report_names_the_runs_made_before_the_product_fix(tmp_path):
-    """Owner, DETENTE 3.3.h: repetitions are not pooled across the product fix, and the report says the latency block
-    predates the queue change once runs after it exist."""
+def test_only_the_final_configuration_feeds_the_published_tables(tmp_path):
+    """Owner, DETENTE 3.3.i: once runs on the final configuration exist, the published tables use them alone, the
+    report names their commit, and the earlier runs stay in the Runs table as history."""
     for i in range(2):
         write_run(tmp_path, f"a-lat-{i}", "latency", 50, 7.0, repetition=i + 1)
     write_run(tmp_path, "b-lat-new", "latency", 50, 9.0)
     m = json.loads((tmp_path / "b-lat-new" / "manifest.json").read_text(encoding="utf-8"))
-    m["harness_revision"] = "after the 3.3.h product fix"
+    m["harness_revision"] = "final configuration (after 3.3.h and 3.3.i)"
+    m["environment"] = {"git": {"commit": "abc1234def", "dirty": False}}
     (tmp_path / "b-lat-new" / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
     runs = [report.load_run(d) for d in sorted(tmp_path.iterdir())]
     text = report.render(runs, criteria.Thresholds(1000, 1.0, 0.001, 0, 5.0, 100.0), (), 0.8, 5)
-    assert "| latency | 50 | INFO | before the 3.3.f harness change | 2 | F1 e2e |" in text
-    assert "after the 3.3.h product fix | 1 |" not in text  # one run alone is not a repetition group
-    assert "## Runs made before the product fix (DETENTE 3.3.h)" in text
-    assert "These runs measured the product before that change: latency 50/s: 2." in text
-    assert "the latency block predates the queue change" in text
-    assert report.product_fix_note([r for r in runs if r["dir"].startswith("a-")]) == []  # no run after the fix yet
-    assert report.product_fix_note([r for r in runs if r["dir"].startswith("b-")]) == []  # none before it
+    assert "## Repetitions" not in text  # the two earlier runs are history; one final run is no repetition group
+    assert "## Final configuration (DETENTE 3.3.i)" in text
+    assert "The tables below use only the 1 runs on the final configuration" in text
+    assert "made at commit(s) abc1234, none with uncommitted changes." in text
+    assert "Earlier runs, kept as history in the Runs table and not in the tables below: latency 50/s: 2." in text
+    assert "| a-lat-0 | before the 3.3.f harness change | latency | 50 |" in text
+    publishable = {line.split(" | ")[0][2:]: line.split(" | ")[7] for line in text.splitlines() if line.startswith("| a-lat-0")
+                   or line.startswith("| b-lat-new")}
+    assert publishable == {"a-lat-0": "no", "b-lat-new": "yes"}  # an earlier run is history, never published
+    assert report.final_configuration_note([r for r in runs if r["dir"].startswith("a-")]) == []  # none on it yet
+    assert "Earlier runs, kept as history in the Runs table and not in the tables below: none." in "\n".join(
+        report.final_configuration_note([r for r in runs if r["dir"].startswith("b-")]))

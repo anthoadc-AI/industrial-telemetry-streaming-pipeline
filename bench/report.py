@@ -170,28 +170,35 @@ def repetitions(groups: dict[tuple, list[dict]]) -> list[str]:
     return lines
 
 
-PRODUCT_FIX = "after the 3.3.h product fix"
+def is_final(run: dict) -> bool:
+    return (run["manifest"].get("harness_revision") or "") == analysis.FINAL_CONFIGURATION
 
 
-def product_fix_note(pipeline: list[dict]) -> list[str]:
-    """Owner, DETENTE 3.3.h: once runs exist after the product fix, the report says which figures predate it."""
-    revisions = [r["manifest"].get("harness_revision") for r in pipeline]
-    if analysis.latest_revision(revisions) != PRODUCT_FIX:
+def final_configuration_note(pipeline: list[dict]) -> list[str]:
+    """Owner, DETENTE 3.3.i: once runs on the final configuration exist, only they feed the published tables; the
+    report names the commit(s) they were made at and lists the earlier runs, kept as history."""
+    final = [r for r in pipeline if is_final(r)]
+    if not final:
         return []
+    commits = sorted({(r["manifest"].get("environment") or {}).get("git", {}).get("commit", "?")[:7] for r in final})
+    dirty = sum(bool((r["manifest"].get("environment") or {}).get("git", {}).get("dirty")) for r in final)
     before: dict[tuple, int] = {}
     for r in pipeline:
         m = r["manifest"]
-        if not m["trial"] and not m.get("diagnostic") and (m.get("harness_revision") or "") != PRODUCT_FIX:
-            key = (m["mode"] + (" (sensitivity)" if m.get("sensitivity") else ""), m["rate_per_s"])
+        if not is_final(r) and not m["trial"]:
+            key = (m["mode"] + (" (sensitivity)" if m.get("sensitivity") else "") + (
+                " (diagnostic)" if m.get("diagnostic") else ""), m["rate_per_s"])
             before[key] = before.get(key, 0) + 1
-    if not before:
-        return []
-    listed = "; ".join(f"{mode} {rate:g}/s: {n}" for (mode, rate), n in sorted(before.items()))
-    return ["", "## Runs made before the product fix (DETENTE 3.3.h)", "",
-            "The product changed at DETENTE 3.3.h: Mosquitto's queue per client went from its default (about 1040 "
-            "messages) to 60000 messages / 25 MiB, and the bridge watches Mosquitto's dropped counter on a connection "
-            f"of its own. These runs measured the product before that change: {listed}. In particular the latency block "
-            "predates the queue change; at its rates the queue stayed at its baseline."]
+    listed = "; ".join(f"{mode} {rate:g}/s: {n}" for (mode, rate), n in sorted(before.items())) or "none"
+    return ["", "## Final configuration (DETENTE 3.3.i)", "",
+            f"The tables below use only the {len(final)} runs on the final configuration (harness revision "
+            f"\"{analysis.FINAL_CONFIGURATION}\"), made at commit(s) {', '.join(commits)}"
+            + (f", {dirty} of them with uncommitted changes" if dirty else ", none with uncommitted changes") + ". "
+            "It differs from the earlier runs in Mosquitto's queue per client (60000 messages / 25 MiB instead of about "
+            "1040), the bridge's drop monitor, the broker and ZooKeeper healthchecks (no JVM; every earlier run had "
+            "one running inside the broker's pinned vCPUs every ~11 s) and the cp-server telemetry reporter and "
+            "Self-Balancing turned off. A run on it is valid only if Mosquitto dropped no message.",
+            "", f"Earlier runs, kept as history in the Runs table and not in the tables below: {listed}."]
 
 
 def environment_problems(m: dict) -> list[str]:
@@ -264,32 +271,37 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
                          "limited by the measuring tools, not by the pipeline.")
 
     pipeline = [r for r in runs if r["manifest"]["mode"] in ("latency", "throughput")]
+    # Owner, DETENTE 3.3.i: once runs on the final configuration exist, only they feed the published tables.
+    any_final = any(is_final(r) for r in pipeline)
+    published = [r for r in pipeline if is_final(r)] if any_final else pipeline
+    lines += final_configuration_note(pipeline)
     lines += ["", "## Runs", "",
               "Valid and sustainable are re-evaluated from each run's stored data under the current rules (DETENTE "
               "3.3.f: the CPU limit applies to the instruments only); \"Recorded\" is what its manifest wrote when it ran.",
               "",
-              "| Run | Mode | Rate/s | Bridge log | Valid | Recorded | Publishable | F1 e2e p50/p95/p99 ms | ingest | "
-              "produce_to_visible | F2 alarm | F4 produce-to-ack | Generator late | Negatives e2e/ingest/ptv/F2/F4 | Clock | "
-              "Problems |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "| Run | Revision | Mode | Rate/s | Bridge log | Valid | Recorded | Publishable | F1 e2e p50/p95/p99 ms | "
+              "ingest | produce_to_visible | F2 alarm | F4 produce-to-ack | Generator late | Negatives e2e/ingest/ptv/F2/F4 | "
+              "Clock | Problems |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for run in pipeline:
         m, h = run["manifest"], run["hists"]
         v = criteria.evaluate(run_input(run, max_core_fraction), t)
         recorded = f"valid {'yes' if m.get('valid') else 'no'}" + (
             f", sustainable {'yes' if m.get('sustainable') else 'no'}" if m.get("sustainable") is not None else "")
-        publishable = (not m["trial"]) and not m.get("diagnostic") and v.valid
+        publishable = (not m["trial"]) and not m.get("diagnostic") and v.valid and (is_final(run) or not any_final)
         # D8 reasons belong to throughput runs only (see bench/harness.py); others show validity problems alone.
         shown = v.reasons if (m["mode"] == "throughput" and not m["trial"]) or not v.valid else []
         kind = "trial" if m["trial"] else m["mode"] + (" (sensitivity)" if m.get("sensitivity") else "") + (
             " (diagnostic)" if m.get("diagnostic") else "")
-        lines.append(f"| {run['dir']} | {kind} | {m['rate_per_s']:g} | {m.get('bridge_log_level', '-')} | "
+        lines.append(f"| {run['dir']} | {revision_name(m.get('harness_revision'))} | {kind} | {m['rate_per_s']:g} | "
+                     f"{m.get('bridge_log_level', '-')} | "
                      f"{'yes' if v.valid else 'no'} | {recorded} | {'yes' if publishable else 'no'} | {triple(h.get('e2e'))} | "
                      f"{triple(h.get('ingest'))} | {triple(h.get('produce_to_visible'))} | {triple(h.get('alarm_e2e'))} | "
                      f"{triple(h.get('produce_to_ack'))} | {late_triple(h.get('generator_late'))} | {negatives(run)} | "
                      f"{clock(run)} | {'; '.join(shown) or '-'} |")
 
     groups: dict[tuple, list[dict]] = {}
-    for run in pipeline:
+    for run in published:
         m = run["manifest"]
         if not m["trial"] and not m.get("diagnostic") and criteria.evaluate(run_input(run, max_core_fraction), t).valid:
             groups.setdefault((m["mode"], m["rate_per_s"], m.get("bridge_log_level", "-"),
@@ -297,9 +309,8 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
     repeated = {k: v for k, v in groups.items() if len(v) > 1}
     if repeated:
         lines += ["", "## Repetitions (median and range across valid runs, whole ms)", ""] + repetitions(repeated)
-    lines += product_fix_note(pipeline)
 
-    headline = [r for r in pipeline if r["manifest"]["mode"] == "throughput" and not r["manifest"]["trial"]
+    headline = [r for r in published if r["manifest"]["mode"] == "throughput" and not r["manifest"]["trial"]
                 and not r["manifest"].get("diagnostic")
                 and not r["manifest"].get("sensitivity")]
     lines += ["", "## Throughput ladder (F3, D8; bridge at the product default log level)", ""]
@@ -340,7 +351,8 @@ def render(runs: list[dict], t: criteria.Thresholds, ladder_per_s: tuple[float, 
                      "not be measured validly (an instrument at its limit); the ladder ends there, with no intermediate "
                      "step.")
 
-    sensitivity = [r for r in pipeline if r["manifest"].get("sensitivity")]
+    # A diagnostic is listed in the Runs table only, never in a published table (DETENTE 3.3.i).
+    sensitivity = [r for r in published if r["manifest"].get("sensitivity") and not r["manifest"].get("diagnostic")]
     if sensitivity:
         lines += ["", "## Log-level sensitivity (same steps, bridge at the sensitivity log level)", "",
                   "| Rate/s | Log level | Runs | Sustainable | F1 e2e p50/p95/p99 ms |", "|---|---|---|---|---|"]

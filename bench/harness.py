@@ -68,8 +68,9 @@ PY = sys.executable
 BOOTSTRAP = "localhost:9092"
 T0_LEAD_S = 8.0
 # Every manifest records which harness rules produced it (results are never re-run under new rules, only
-# re-evaluated by bench/report.py from their stored data). DETENTE 3.3.h changed the product (Mosquitto's queue, the
-# bridge's drop monitor): runs from then on are labelled with it. The order is bench.analysis.HARNESS_REVISIONS.
+# re-evaluated by bench/report.py from their stored data). DETENTE 3.3.h and 3.3.i changed the product (Mosquitto's
+# queue, the bridge's drop monitor, healthchecks, cp-server features): runs from then on are labelled as the final
+# configuration. The order is bench.analysis.HARNESS_REVISIONS.
 HARNESS_REVISION = analysis.HARNESS_REVISIONS[-1]
 
 
@@ -592,8 +593,10 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
             p.error("--rate is required unless --trial or --mode calibrate-meter")
         if args.sensitivity and args.mode != "throughput":
             p.error("--sensitivity applies to --mode throughput only")
-        if args.diagnostic and (args.mode != "throughput" or args.trial or args.sensitivity):
-            p.error("--diagnostic applies to --mode throughput only, without --trial or --sensitivity")
+        # A sensitivity run can be a diagnostic (owner, DETENTE 3.3.i: WARNING at 3000 msg/s, where the generator
+        # saturates, is a diagnostic only).
+        if args.diagnostic and (args.mode != "throughput" or args.trial):
+            p.error("--diagnostic applies to --mode throughput only, without --trial")
         if args.full_window and not args.diagnostic:
             p.error("--full-window applies to --diagnostic only")
         if args.mode == "calibrate-generator":
