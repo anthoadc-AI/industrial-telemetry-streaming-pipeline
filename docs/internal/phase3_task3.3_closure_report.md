@@ -72,20 +72,36 @@ The WARNING side at 2000/s is a single run.
 ### 2.1 El artefacto de latencia entre el host y la VM (STEP 0)
 - **Problema.** El briefing citaba unos 16 ms en el smoke y unos 42-44 ms con mensajes aislados para el bridge en el host de Windows. Las cifras no se podían usar sin saber de dónde salían.
 - **Acción.** Matriz de diagnóstico en cuatro pasadas y un experimento añadido (`bimodal.py`, 40 celdas en ráfaga) para separar seis hipótesis (`docs/internal/benchmark_protocol_proposal.md`, 1.3 y 1.4).
-- **Resultado.** Las ráfagas desde el host caen, según la conexión, en un modo lento con una ida y vuelta de unos 45 ms: 17 de 32 celdas en ráfaga en el host, 0 de 8 en el contenedor. Los mensajes aislados quedaron entre 14,6 y 16,9 ms de p50; los 42-44 ms no se reprodujeron. La ubicación está confirmada (el camino del host a la VM del reenvío de Docker Desktop); el mecanismo no está identificado. Decisión D1, opción (A), con la enmienda E1 (el bridge, el consumer y el sink en contenedores, como perfil del compose): todo el benchmark corre en contenedores dentro de la VM, de modo que ninguna cifra cruza ese camino.
+- **Resultado.** Las ráfagas desde el host caen, según la conexión, en un modo lento con una ida y vuelta de unos 45 ms: 17 de 32 celdas en ráfaga en el host y 0 de 8 celdas en ráfaga en el contenedor, las dos en el mismo experimento (`bimodal-ac`; protocolo, tablas de 1.3 y 1.4). El "0 de 13" del informe del STEP 0 cuenta todas las celdas del contenedor, también las 5 de la pasada 4, que no son todas en ráfaga (protocolo, 1.3: "5 en la pasada 4 y 8 en bimodal-ac"). Los mensajes aislados quedaron entre 14,6 y 16,9 ms de p50; los 42-44 ms no se reprodujeron. La ubicación está confirmada (el camino del host a la VM del reenvío de Docker Desktop); el mecanismo no está identificado. Decisión D1, opción (A), con la enmienda E1 (el bridge, el consumer y el sink en contenedores, como perfil del compose): todo el benchmark corre en contenedores dentro de la VM, de modo que ninguna cifra cruza ese camino.
 
 ### 2.2 StopTimeout de Docker Desktop
-- **Problema.** Docker Desktop 4.53 creó los contenedores del proyecto con StopTimeout de 1 s (comprobado con `docker inspect` el 2026-10-09, origen no identificado). El alarm consumer necesitaba de 1,5 a 3,6 s para desconectarse y Docker lo mataba a mitad de la parada; el bridge vacía su productor hasta 10 s.
-- **Acción.** `stop_grace_period: 30s` en los servicios del pipeline (`7386596`, comentario en `docker-compose.yml`).
-- **Resultado.** Las paradas son limpias: `tests/integration/test_containers.py` exige `run_finished` con totales exactos y salida 0 al parar los contenedores.
+- **Problema.** Docker Desktop 4.53 creó los contenedores del proyecto, y los de cualquier otro, con `Config.StopTimeout` de 1 s (`docker inspect`, 2026-10-09). Ningún fichero del repositorio lo fija, y el valor por defecto del motor es 10 s. El alarm consumer necesitaba de 1,5 a 3,6 s para desconectarse y Docker lo mataba a mitad de la parada; el bridge vacía su productor hasta 10 s. En el CI de Linux la misma parada espera 10 s, así que la parada se comportaba distinto en los dos sitios.
+- **Origen, identificado en el DETENTE 3.3.c (2026-10-10; mensaje de `da7a728`):** el proxy de la API de Docker Desktop. Se mostró enviando la misma petición de creación de contenedor, sin StopTimeout, desde un contenedor de prueba a los dos sockets de la VM de Docker Desktop:
+  - por `docker.raw.sock` (el propio dockerd), el contenedor quedó con StopTimeout nulo, el valor por defecto del motor;
+  - por `docker.sock` (el proxy, el que usan la CLI y Compose), quedó con 1;
+  - un `docker run` simple y un proyecto compose mínimo fuera del repositorio también recibieron 1, y `--stop-timeout 7` se respetó.
+
+  Por qué el proxy elige 1 no está identificado.
+- **Acción.**
+  - `stop_grace_period: 30s` en los contenedores del pipeline (`7386596`);
+  - un valor explícito para cada servicio (`da7a728`): broker 30 s; ZooKeeper y Schema Registry 10 s; Mosquitto 5 s; ThingsBoard 5 s (sección 2.3).
+- **Resultado.**
+  - Verificado tras `make up` (perfil full) y `make down`: Mosquitto salió con 0, y Schema Registry, el broker y ZooKeeper con 143 (la salida normal de la JVM ante SIGTERM); ninguno por SIGKILL (`da7a728`).
+  - Las paradas del pipeline son limpias: `tests/integration/test_containers.py` exige `run_finished` con totales exactos y salida 0.
+  - Antes, con 60 s de gracia para ThingsBoard, `make down` tardaba 61,2 s, todo el periodo de gracia, porque ThingsBoard ignora SIGTERM.
+  - Ahora, el `docker compose down` de todos los perfiles al final de las tres sesiones locales completas de cada perfil del 2026-10-12 tardó 5,0-5,8 s (core) y 6,1-21,4 s (full), según el resumen "integration stack" de pytest. El caso de 21,4 s no se investigó.
 
 ### 2.3 ThingsBoard ignora SIGTERM
 - **Problema.** En `thingsboard/tb-postgres:4.2.1.1`, el proceso PID 1 es `start-tb.sh`, un bash sin `trap` que no reenvía la señal. Comprobado el 2026-10-10: SIGTERM, y SIGKILL 60 s después, salida 137. Postgres hace recuperación de fallo en cada arranque.
 - **Acción.** Periodo de gracia de 5 s, documentado. La opción (b), un script propio con `trap`, queda en el backlog sin programar.
-- **Resultado.** Sin resolver. Por eso F7 (tiempo de drenaje tras una caída de ThingsBoard) no se midió, y F5 y F6 quedan aplazadas (backlog).
+- **Resultado.** Sin resolver. Por eso F7 (tiempo de drenaje tras una caída de ThingsBoard) no se midió: requiere una parada controlada de ThingsBoard.
+- **F5 y F6 son otra cosa:** las aplazó el owner por decisión de alcance el 2026-10-12 (DETENTE 3.3.g), no por SIGTERM. Quedan fuera del README, con su elemento de backlog (`b538247`).
 
 ### 2.4 Pérdidas en la cola de Mosquitto, y su corrección
-- **Problema.** Con los valores por defecto de Mosquitto (1000 mensajes QoS 1 en cola por cliente, sin límite de bytes), un bridge que se retrasaba menos de un segundo perdía mensajes: Mosquitto descartaba los nuevos y seguía mandando el PUBACK al publicador. Se perdieron 785 mensajes a 2000 msg/s (r2 del bloque 4) y 56 880 y 72 329 a 3000 msg/s (bloque 3).
+- **Problema.** Con los valores por defecto de Mosquitto, un bridge que se retrasaba menos de un segundo perdía mensajes: Mosquitto descartaba los nuevos y seguía mandando el PUBACK al publicador.
+  - El límite documentado es `max_queued_messages` 1000, sin límite de bytes. El medido en el contenedor (Mosquitto 2.1.2) fue de **1040 mensajes por cliente**: 1040 de 5000 llegaron en el control (`97ecefe`), y la sección 0 de la nota de diseño lo recoge.
+  - Se perdieron 56 880 y 72 329 mensajes a 3000 msg/s (bloque 3).
+  - Se perdieron 785 a 2000 msg/s (r2 del bloque 4). **Atribuirlos a este mecanismo es una inferencia:** r2 no tiene datos `$SYS` ni log de Mosquitto (se guardan desde `141a259`); solo coincide el patrón.
 - **Acción.** Diagnóstico a 3000 msg/s con la ventana completa (`0dcf77b`), que confirmó el mecanismo: 61 140 descartados según `$SYS/broker/publish/messages/dropped`, exactamente los 61 140 que faltaban en `telemetry.raw`. Corrección aprobada en el DETENTE 3.3.h:
   - cola de 60 000 mensajes y 25 MiB, con su regla de dimensionado (`baef69b`);
   - un monitor de descartes en el bridge, en una conexión propia (`5c225e0`);
@@ -120,6 +136,7 @@ The WARNING side at 2000/s is a single run.
 | 2026-10-11 (DETENTE 3.3.f) | El límite de CPU de 0,8 núcleos se aplica solo a los instrumentos (generador y medidor). El bridge y el consumer se juzgan solo por D8. | En el bloque 3, las dos corridas a 2000 msg/s eran inválidas solo por "CPU-bound client(s): bridge at 102 % of a core", con el pipeline dentro de D8. Un bridge a un núcleo es el sistema bajo prueba trabajando, no un fallo de medida. Consta en `docs/internal/benchmark_step1_design.md`. | `df684f6` |
 | 2026-10-11 | Cierre de la escalera: un escalón inválido con un instrumento en su límite termina la escalera ("limited by the measuring tools"), sin escalón intermedio. | A 3000 msg/s el generador estaba al 97-98 % de un núcleo. F3 se cerró en 2000 por decisión del owner. | `3d24ec3` |
 | 2026-10-11 | E2 cuenta solo las corridas de la última revisión del arnés. Ventana de reloj corregida (desde la muestra anterior al salto). | No mezclar corridas de antes y después de un cambio del arnés. La ventana anterior no recogía ninguna muestra negativa. | `3d24ec3` |
+| 2026-10-11 | **F3 reabierta.** Tras la pérdida de 785 mensajes en r2 a 2000 msg/s, el owner contó r2 como repetición fallida y reabrió dónde cierra F3 (el 3.3.f la había cerrado en 2000). | El mecanismo se confirmó ese mismo día con el diagnóstico a 3000 msg/s (`0dcf77b`). F3 quedó resuelta por la serie sobre la configuración final: 2000 msg/s, confirmado 5 de 5. | `86edf0b`, `0dcf77b` |
 | 2026-10-11/12 (DETENTE 3.3.h) | Una corrida es válida solo si Mosquitto no descartó ningún mensaje. | El mecanismo de pérdida de la sección 2.4. | `61c009f` |
 | 2026-10-12 (DETENTE 3.3.i) | Solo las corridas de la configuración final alimentan las tablas publicadas. Las anteriores quedan como historia, etiquetadas. | El producto cambió (cola, monitor, healthchecks, cp-server). | `d53be71` |
 | 2026-10-12 (DETENTE 3.3.g) | Sustitución en E2: un intento inválido solo por un instrumento en su límite (sin pérdidas ni descartes de Mosquitto) se sustituye por su repetición válida. Cualquier otro intento inválido cuenta y hace fallar E2. | r3 a 2000 msg/s: el generador se detuvo 272 ms (al 102 % de un núcleo); nada se perdió y Mosquitto descartó 0. A diferencia del r2 del bloque 4, que perdió 785 mensajes. El informe muestra los seis intentos. | `8d5abfc`, `47c040b` |
@@ -128,8 +145,10 @@ The WARNING side at 2000/s is a single run.
 
 - **Todas.** Un solo portátil: WSL2 con 8 vCPU fijadas por servicio, todos los componentes en el mismo host y red Docker local; no dicen nada de máquinas separadas ni de redes reales. Ventanas de 300 s, no horas. Marcas de tiempo de milisegundo. Los saltos de reloj de WSL2 son conocidos: las muestras negativas se cuentan y nunca se descartan.
 - **F1 (e2e) e `ingest`:** se miden desde el instante programado, así que una parada del generador cuenta como latencia del pipeline (el intento r3, sección 3). A 5 msg/s no hay muestras suficientes para el p99.
-- **F2 (alarma):** con un patrón de fallo fijo (temperatura del rodamiento alta 10 s de cada 20) en 100 activos clonados.
+- **F2 (alarma):** con un patrón de fallo fijo (temperatura del rodamiento alta 10 s de cada 20). A 5 y 50 msg/s, en los 5 activos reales; los 100 clones (20 por activo) solo se usan en las corridas de throughput, así que F2 a 2000 msg/s es con 100 activos (`bench/harness.py`, `execute`).
 - **F3:** 2000 msg/s es el escalón más alto medido válidamente. El de 3000 lo limita el generador, aunque el pipeline también se retrasaba ahí en INFO. No se midió ningún escalón entre 2000 y 3000. Bridge en INFO, el valor por defecto.
+  - **El generador está cerca de su propio límite a 2000 msg/s en el stack completo:** en las cinco corridas válidas usó de media el 55,0-60,6 % de un núcleo, con picos del 68-76 %, frente a un límite de 80 %.
+  - Uno de los seis intentos se saturó: pico del 102 %, media del 57,8 % y una parada de 272 ms (CPU de `cpu.csv` en la ventana medida; picos del manifiesto).
 - **F4 (`produce_to_ack`):** Kafka escribe en tmpfs con un solo broker y factor de replicación 1, así que `acks=all` no cuesta nada más. Es optimista frente a un Kafka en disco y replicado.
 - **Carga y entrega:** mensajes sintéticos de unos 218 B. Antes de que el bridge reciba un mensaje, la entrega es como mucho una vez, con un búfer acotado y sin contrapresión. Lo publicado con el bridge caído se pierde (backlog).
 - **Calibración:** no se repitió en la configuración final (los instrumentos no cambiaron). El tope de la escalera (3000) sale de las corridas de calibración anteriores.
@@ -140,6 +159,7 @@ The WARNING side at 2000/s is a single run.
 - El mecanismo del modo lento del reenvío de Docker Desktop, y por qué el linger de 5 ms cuesta 12-13 ms en Windows (STEP 0).
 - Los picos de CPU del broker con carga (156-189 % de un núcleo). Caen en los primeros 13 s del envío y ningún evento registrado los explica (sección 11 del documento de diseño).
 - Por qué el generador se detuvo 272 ms en el intento r3.
+- Que los 785 mensajes perdidos en r2 (bloque 4, primera serie) se debieran a la cola de Mosquitto: es una inferencia; esa corrida no tiene datos `$SYS` ni log de Mosquitto.
 - Cuánta parte de cada mejora entre la serie anterior y la final se debe a cada cambio: la cola, los healthchecks y cp-server cambiaron a la vez.
 - El coste del log con más de una corrida en WARNING.
 - La memoria de ZooKeeper y su CPU en reposo después de cambiar su healthcheck (solo se probó `srvr` en un contenedor aparte).
@@ -174,6 +194,8 @@ The WARNING side at 2000/s is a single run.
   - comparaciones en reposo (fuera de `bench/results/`).
 - El bloque de sensibilidad se corrió una sola vez, al final y sobre la configuración final, y el diagnóstico a 3000 msg/s se pidió como no publicable.
 - Los intentos sin resultados se conservan como directorios incompletos (`20261012T183625Z` y `20261012T184014Z`, con su `compose.override.yml`).
+- **El commit `44088cc` se titula "block sensitivity (2 runs)", pero contiene esos dos intentos fallidos sin resultados.** Lo escribió el ejecutor de series antes de la corrección, que contaba un intento sin resultados como corrida. El bloque WARNING real está en `b7cb2f9`, con el mismo título.
+- F3 se reabrió el 2026-10-11 y se resolvió con la serie final (sección 3); el briefing preveía cerrarla tras el bloque 3.
 
 ## 7. Corridas y horas de portátil
 
