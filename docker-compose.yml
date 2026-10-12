@@ -72,8 +72,14 @@ services:
       - /var/lib/zookeeper/data:uid=1000,gid=1000
       - /var/lib/zookeeper/log:uid=1000,gid=1000
       - /etc/zookeeper/secrets:uid=1000,gid=1000
+    # Healthcheck without a JVM (DETENTE 3.3.i): `cub zk-ready` started a Java
+    # client every ~11 s inside this container (about 0.75 s and up to 0.8 of a
+    # core each time, measured idle on 2026-10-12). `srvr` is a ZooKeeper
+    # four-letter command allowed by default in 3.5.9; its reply has a
+    # "Mode:" line only while the server is serving. Unlike zk-ready it opens
+    # no client session.
     healthcheck:
-      test: ["CMD", "cub", "zk-ready", "localhost:2181", "5"]
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep -q '^Mode: '"]
       interval: 10s
       timeout: 10s
       retries: 6
@@ -108,8 +114,16 @@ services:
     tmpfs:
       - /var/lib/kafka/data:uid=1000,gid=1000
       - /etc/kafka/secrets:uid=1000,gid=1000
+    # Healthcheck without a JVM (DETENTE 3.3.i): `cub kafka-ready` started a
+    # Java admin client every ~11 s inside this container, about 1.3 s and up
+    # to 1.6 cores each time; idle, it was most of the broker container's CPU
+    # (mean 18.0 % of a core with it, 5.9 % with this check, 2026-10-12). This
+    # check only proves that the listener accepts TCP connections; kafka-ready
+    # also required a metadata answer listing the broker, which can come a
+    # moment later. Schema Registry's image still runs kafka-ready once, in
+    # its own start-up script, before it starts.
     healthcheck:
-      test: ["CMD", "cub", "kafka-ready", "-b", "localhost:9092", "1", "5"]
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
       interval: 10s
       timeout: 15s
       retries: 10
