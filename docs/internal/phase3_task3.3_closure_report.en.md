@@ -200,7 +200,7 @@ There are also 2 WARNING attempts without results (a harness failure, section 2.
 - The sensitivity block ran once, at the end and on the final configuration, and the 3000 msg/s diagnostic was requested as not publishable.
 - The attempts without results are kept as incomplete directories (`20261012T183625Z` and `20261012T184014Z`, with their `compose.override.yml`).
 - **Commit `44088cc` is titled "block sensitivity (2 runs)" but holds those two crashed attempts without results.** The series runner wrote it before the fix, when it counted an attempt without results as a run. The real WARNING block is `b7cb2f9`, with the same title.
-- F3 was reopened on 2026-10-11 and settled by the final series (section 3); the briefing expected it to close after block 3.
+- F3 was reopened on 2026-10-11 and settled by the final series (section 3); in the briefing's plan, the ladder (block 3) gave the candidate and the E2 repetitions (block 4) confirmed it.
 
 ## 7. Runs and laptop hours
 

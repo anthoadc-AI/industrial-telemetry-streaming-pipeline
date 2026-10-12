@@ -195,7 +195,7 @@ The WARNING side at 2000/s is a single run.
 - El bloque de sensibilidad se corrió una sola vez, al final y sobre la configuración final, y el diagnóstico a 3000 msg/s se pidió como no publicable.
 - Los intentos sin resultados se conservan como directorios incompletos (`20261012T183625Z` y `20261012T184014Z`, con su `compose.override.yml`).
 - **El commit `44088cc` se titula "block sensitivity (2 runs)", pero contiene esos dos intentos fallidos sin resultados.** Lo escribió el ejecutor de series antes de la corrección, que contaba un intento sin resultados como corrida. El bloque WARNING real está en `b7cb2f9`, con el mismo título.
-- F3 se reabrió el 2026-10-11 y se resolvió con la serie final (sección 3); el briefing preveía cerrarla tras el bloque 3.
+- F3 se reabrió el 2026-10-11 y se resolvió con la serie final (sección 3); en el plan del briefing, la escalera (bloque 3) daba el candidato y las repeticiones E2 (bloque 4) lo confirmaban.
 
 ## 7. Corridas y horas de portátil
 
