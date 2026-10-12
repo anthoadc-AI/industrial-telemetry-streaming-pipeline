@@ -1,0 +1,81 @@
+{"ts": "2026-10-12T15:33:20+00:00", "event": "series_start", "ladder": [250.0, 500.0, 1000.0, 2000.0, 3000.0], "latency": [5.0, 50.0], "repetitions": 5, "repetitions_at_candidate": 5, "commit": "d53be71", "environment": []}
+{"ts": "2026-10-12T15:33:20+00:00", "event": "cooldown", "seconds": 120, "next": "latency 5/s r1"}
+{"ts": "2026-10-12T15:35:20+00:00", "event": "start", "point": "latency 5/s r1", "cmd": "-m bench.harness run --mode latency --rate 5 --repetition 1"}
+{"ts": "2026-10-12T15:41:53+00:00", "event": "run", "point": "latency 5/s r1", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T153520Z-latency-5-r1"}
+{"ts": "2026-10-12T15:41:53+00:00", "event": "cooldown", "seconds": 120, "next": "latency 5/s r2"}
+{"ts": "2026-10-12T15:43:53+00:00", "event": "start", "point": "latency 5/s r2", "cmd": "-m bench.harness run --mode latency --rate 5 --repetition 2"}
+{"ts": "2026-10-12T15:50:23+00:00", "event": "run", "point": "latency 5/s r2", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T154353Z-latency-5-r2"}
+{"ts": "2026-10-12T15:50:23+00:00", "event": "cooldown", "seconds": 120, "next": "latency 5/s r3"}
+{"ts": "2026-10-12T15:52:23+00:00", "event": "start", "point": "latency 5/s r3", "cmd": "-m bench.harness run --mode latency --rate 5 --repetition 3"}
+{"ts": "2026-10-12T15:58:53+00:00", "event": "run", "point": "latency 5/s r3", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T155224Z-latency-5-r3"}
+{"ts": "2026-10-12T15:58:53+00:00", "event": "cooldown", "seconds": 120, "next": "latency 5/s r4"}
+{"ts": "2026-10-12T16:00:53+00:00", "event": "start", "point": "latency 5/s r4", "cmd": "-m bench.harness run --mode latency --rate 5 --repetition 4"}
+{"ts": "2026-10-12T16:07:22+00:00", "event": "run", "point": "latency 5/s r4", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T160053Z-latency-5-r4"}
+{"ts": "2026-10-12T16:07:22+00:00", "event": "cooldown", "seconds": 120, "next": "latency 5/s r5"}
+{"ts": "2026-10-12T16:09:22+00:00", "event": "start", "point": "latency 5/s r5", "cmd": "-m bench.harness run --mode latency --rate 5 --repetition 5"}
+{"ts": "2026-10-12T16:15:48+00:00", "event": "run", "point": "latency 5/s r5", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T160922Z-latency-5-r5"}
+{"ts": "2026-10-12T16:15:48+00:00", "event": "cooldown", "seconds": 120, "next": "latency 50/s r1"}
+{"ts": "2026-10-12T16:17:48+00:00", "event": "start", "point": "latency 50/s r1", "cmd": "-m bench.harness run --mode latency --rate 50 --repetition 1"}
+{"ts": "2026-10-12T16:24:16+00:00", "event": "run", "point": "latency 50/s r1", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T161748Z-latency-50-r1"}
+{"ts": "2026-10-12T16:24:17+00:00", "event": "cooldown", "seconds": 120, "next": "latency 50/s r2"}
+{"ts": "2026-10-12T16:26:17+00:00", "event": "start", "point": "latency 50/s r2", "cmd": "-m bench.harness run --mode latency --rate 50 --repetition 2"}
+{"ts": "2026-10-12T16:32:42+00:00", "event": "run", "point": "latency 50/s r2", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T162617Z-latency-50-r2"}
+{"ts": "2026-10-12T16:32:43+00:00", "event": "cooldown", "seconds": 120, "next": "latency 50/s r3"}
+{"ts": "2026-10-12T16:34:43+00:00", "event": "start", "point": "latency 50/s r3", "cmd": "-m bench.harness run --mode latency --rate 50 --repetition 3"}
+{"ts": "2026-10-12T16:41:07+00:00", "event": "run", "point": "latency 50/s r3", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T163443Z-latency-50-r3"}
+{"ts": "2026-10-12T16:41:07+00:00", "event": "cooldown", "seconds": 120, "next": "latency 50/s r4"}
+{"ts": "2026-10-12T16:43:07+00:00", "event": "start", "point": "latency 50/s r4", "cmd": "-m bench.harness run --mode latency --rate 50 --repetition 4"}
+{"ts": "2026-10-12T16:49:37+00:00", "event": "run", "point": "latency 50/s r4", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T164308Z-latency-50-r4"}
+{"ts": "2026-10-12T16:49:37+00:00", "event": "cooldown", "seconds": 120, "next": "latency 50/s r5"}
+{"ts": "2026-10-12T16:51:37+00:00", "event": "start", "point": "latency 50/s r5", "cmd": "-m bench.harness run --mode latency --rate 50 --repetition 5"}
+{"ts": "2026-10-12T16:58:09+00:00", "event": "run", "point": "latency 50/s r5", "exit_code": 0, "valid": true, "sustainable": null, "problems": [], "run_id": "20261012T165137Z-latency-50-r5"}
+{"ts": "2026-10-12T16:58:22+00:00", "event": "committed", "block": "latency", "commit": "eff697c", "pushed": true, "push_error": null}
+{"ts": "2026-10-12T16:58:22+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 250/s r1"}
+{"ts": "2026-10-12T17:00:22+00:00", "event": "start", "point": "throughput 250/s r1", "cmd": "-m bench.harness run --mode throughput --rate 250 --repetition 1"}
+{"ts": "2026-10-12T17:06:53+00:00", "event": "run", "point": "throughput 250/s r1", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T170023Z-throughput-250-r1"}
+{"ts": "2026-10-12T17:06:53+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 500/s r1"}
+{"ts": "2026-10-12T17:08:53+00:00", "event": "start", "point": "throughput 500/s r1", "cmd": "-m bench.harness run --mode throughput --rate 500 --repetition 1"}
+{"ts": "2026-10-12T17:15:23+00:00", "event": "run", "point": "throughput 500/s r1", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T170854Z-throughput-500-r1"}
+{"ts": "2026-10-12T17:15:23+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 1000/s r1"}
+{"ts": "2026-10-12T17:17:23+00:00", "event": "start", "point": "throughput 1000/s r1", "cmd": "-m bench.harness run --mode throughput --rate 1000 --repetition 1"}
+{"ts": "2026-10-12T17:23:58+00:00", "event": "run", "point": "throughput 1000/s r1", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T171723Z-throughput-1000-r1"}
+{"ts": "2026-10-12T17:23:58+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 2000/s r1"}
+{"ts": "2026-10-12T17:25:58+00:00", "event": "start", "point": "throughput 2000/s r1", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 1"}
+{"ts": "2026-10-12T17:32:38+00:00", "event": "run", "point": "throughput 2000/s r1", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T172558Z-throughput-2000-r1"}
+{"ts": "2026-10-12T17:32:38+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 3000/s r1"}
+{"ts": "2026-10-12T17:34:38+00:00", "event": "start", "point": "throughput 3000/s r1", "cmd": "-m bench.harness run --mode throughput --rate 3000 --repetition 1"}
+{"ts": "2026-10-12T17:41:40+00:00", "event": "run", "point": "throughput 3000/s r1", "exit_code": 1, "valid": false, "sustainable": false, "problems": ["CPU-bound instrument(s): generator at 94 % of a core"], "run_id": "20261012T173438Z-throughput-3000-r1"}
+{"ts": "2026-10-12T17:41:40+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 3000/s r1"}
+{"ts": "2026-10-12T17:43:40+00:00", "event": "start", "point": "throughput 3000/s r1", "cmd": "-m bench.harness run --mode throughput --rate 3000 --repetition 1"}
+{"ts": "2026-10-12T17:50:35+00:00", "event": "run", "point": "throughput 3000/s r1", "exit_code": 1, "valid": false, "sustainable": false, "problems": ["CPU-bound instrument(s): generator at 94 % of a core"], "run_id": "20261012T174340Z-throughput-3000-r1"}
+{"ts": "2026-10-12T17:50:35+00:00", "event": "decision", "text": "ladder ends at 3000/s: not measurable validly, an instrument at its limit (CPU-bound instrument(s): generator at 94 % of a core); limited by the measuring tools, no intermediate step"}
+{"ts": "2026-10-12T17:50:44+00:00", "event": "committed", "block": "ladder", "commit": "e18d48e", "pushed": true, "push_error": null}
+{"ts": "2026-10-12T17:50:44+00:00", "event": "decision", "text": "E2 at the candidate 2000/s: 5 runs, its ladder run included"}
+{"ts": "2026-10-12T17:50:44+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 2000/s r2"}
+{"ts": "2026-10-12T17:52:44+00:00", "event": "start", "point": "throughput 2000/s r2", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 2"}
+{"ts": "2026-10-12T17:59:30+00:00", "event": "run", "point": "throughput 2000/s r2", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T175245Z-throughput-2000-r2"}
+{"ts": "2026-10-12T17:59:30+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 2000/s r3"}
+{"ts": "2026-10-12T18:01:30+00:00", "event": "start", "point": "throughput 2000/s r3", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 3"}
+{"ts": "2026-10-12T18:08:10+00:00", "event": "run", "point": "throughput 2000/s r3", "exit_code": 1, "valid": false, "sustainable": false, "problems": ["CPU-bound instrument(s): generator at 102 % of a core", "generator saturated (lateness p99 2.0 ms, max 272.2129821777344 ms)"], "run_id": "20261012T180130Z-throughput-2000-r3"}
+{"ts": "2026-10-12T18:08:10+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 2000/s r3"}
+{"ts": "2026-10-12T18:10:10+00:00", "event": "start", "point": "throughput 2000/s r3", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 3"}
+{"ts": "2026-10-12T18:16:50+00:00", "event": "run", "point": "throughput 2000/s r3", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T181010Z-throughput-2000-r3"}
+{"ts": "2026-10-12T18:16:50+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 2000/s r4"}
+{"ts": "2026-10-12T18:18:50+00:00", "event": "start", "point": "throughput 2000/s r4", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 4"}
+{"ts": "2026-10-12T18:25:31+00:00", "event": "run", "point": "throughput 2000/s r4", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T181850Z-throughput-2000-r4"}
+{"ts": "2026-10-12T18:25:31+00:00", "event": "cooldown", "seconds": 120, "next": "throughput 2000/s r5"}
+{"ts": "2026-10-12T18:27:31+00:00", "event": "start", "point": "throughput 2000/s r5", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 5"}
+{"ts": "2026-10-12T18:34:17+00:00", "event": "run", "point": "throughput 2000/s r5", "exit_code": 0, "valid": true, "sustainable": true, "problems": [], "run_id": "20261012T182731Z-throughput-2000-r5"}
+{"ts": "2026-10-12T18:34:17+00:00", "event": "decision", "text": "no E2 at the next step: 3000/s cannot be measured validly"}
+{"ts": "2026-10-12T18:34:25+00:00", "event": "committed", "block": "E2", "commit": "2ba274f", "pushed": true, "push_error": null}
+{"ts": "2026-10-12T18:34:25+00:00", "event": "cooldown", "seconds": 120, "next": "throughput sensitivity 2000/s r1"}
+{"ts": "2026-10-12T18:36:25+00:00", "event": "start", "point": "throughput sensitivity 2000/s r1", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 1 --sensitivity"}
+{"ts": "2026-10-12T18:38:13+00:00", "event": "no_run_directory", "point": "throughput sensitivity 2000/s r1", "stderr": "Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 617, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 608, in main\n    return runner()\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 605, in <lambda>\n    runner = lambda: execute(bench, args.mode, rate, args.repetition, args.trial, args.sensitivity,  # noqa: E731\n                     ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                             args.diagnostic, args.full_window)\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 370, in execute\n    wait_for_event(r.override_file, \"bridge\", \"mqtt_subscribed\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 249, in wait_for_event\n    raise RuntimeError(f\"{service}: no {event} within {timeout:g} s\")\nRuntimeError: bridge: no mqtt_subscribed within 60 s\n"}
+{"ts": "2026-10-12T18:38:13+00:00", "event": "run", "point": "throughput sensitivity 2000/s r1", "exit_code": 1, "valid": false, "sustainable": null, "problems": [], "run_id": null}
+{"ts": "2026-10-12T18:38:14+00:00", "event": "cooldown", "seconds": 120, "next": "throughput sensitivity 2000/s r1"}
+{"ts": "2026-10-12T18:40:14+00:00", "event": "start", "point": "throughput sensitivity 2000/s r1", "cmd": "-m bench.harness run --mode throughput --rate 2000 --repetition 1 --sensitivity"}
+{"ts": "2026-10-12T18:42:00+00:00", "event": "no_run_directory", "point": "throughput sensitivity 2000/s r1", "stderr": "Traceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 617, in <module>\n    sys.exit(main())\n             ~~~~^^\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 608, in main\n    return runner()\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 605, in <lambda>\n    runner = lambda: execute(bench, args.mode, rate, args.repetition, args.trial, args.sensitivity,  # noqa: E731\n                     ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                             args.diagnostic, args.full_window)\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 370, in execute\n    wait_for_event(r.override_file, \"bridge\", \"mqtt_subscribed\")\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\Anthony\\MITXpro\\Data E. MITXPRO\\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka\\industrial-telemetry-streaming-pipeline\\bench\\harness.py\", line 249, in wait_for_event\n    raise RuntimeError(f\"{service}: no {event} within {timeout:g} s\")\nRuntimeError: bridge: no mqtt_subscribed within 60 s\n"}
+{"ts": "2026-10-12T18:42:00+00:00", "event": "run", "point": "throughput sensitivity 2000/s r1", "exit_code": 1, "valid": false, "sustainable": null, "problems": [], "run_id": null}
+{"ts": "2026-10-12T18:42:03+00:00", "event": "committed", "block": "sensitivity", "commit": "44088cc", "pushed": true, "push_error": null}
+{"ts": "2026-10-12T18:42:03+00:00", "event": "stop", "reason": "two invalid runs in a row at throughput sensitivity 2000/s r1: [] / []"}
+{"ts": "2026-10-12T18:42:03+00:00", "event": "series_end", "result": "STOPPED: two invalid runs in a row at throughput sensitivity 2000/s r1: [] / []"}
