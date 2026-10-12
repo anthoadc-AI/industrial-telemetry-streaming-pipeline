@@ -43,7 +43,15 @@ message was delivered, 1 otherwise or on a start-up error.
 
 Delivery semantics: MQTT QoS 1 messages are acknowledged to the broker on
 receipt, before Kafka confirms them. A clean stop loses nothing already
-received; a crash can lose messages still queued in the bridge.
+received; a crash can lose messages still queued in the bridge. Before
+receipt, Mosquitto holds a bounded queue for the bridge (mosquitto.conf:
+60000 messages or 25 MiB) and past it drops new messages, still acknowledging
+the publisher; there is no backpressure. The bridge cannot see those messages:
+with drop_monitor enabled in config/bridge.yaml (the default) it watches
+Mosquitto's dropped counter on a connection of its own and logs each increase
+as mqtt_messages_dropped at ERROR (drop_monitor.py: broker-wide, updated every
+10 s), refusing to start if it cannot subscribe. Messages published while the
+bridge is not connected are not delivered (clean session) and are not counted.
 
 Latency fields, logged per delivered message in event "message_delivered",
 in milliseconds. One per stage; every clock is on this host (no broker
@@ -91,6 +99,7 @@ import paho.mqtt.client as mqtt
 from confluent_kafka import KafkaException, Producer
 from confluent_kafka.serialization import SerializationError
 
+from bridge.mqtt_to_kafka.drop_monitor import DropMonitor
 from bridge.mqtt_to_kafka.validation import InvalidMessage, TelemetryValidator
 from common import jsonlog
 from config.loader import ConfigError, load_config
@@ -188,6 +197,8 @@ class Bridge:
         self._reports_stop = threading.Event()
         self.reports_failed = threading.Event()
         self._reports_thread: threading.Thread | None = None
+        self.drop_monitor = (DropMonitor(args.mqtt_host, args.mqtt_port, f"{args.client_id}-drops", time.monotonic())
+                             if cfg.bridge.drop_monitor_enabled else None)
 
     # --- start-up --------------------------------------------------------
 
@@ -241,6 +252,14 @@ class Bridge:
         self.dlq_serializer = AvroSerializer(client, self.dlq_schema_str)
         self.dlq_context = SerializationContext(self.dlq_topic.name, MessageField.VALUE)
         return True
+
+    def start_drop_monitor(self) -> bool:
+        """Subscribe to Mosquitto's dropped counter (drop_monitor.py), before the telemetry subscription; True when
+        the monitor is disabled."""
+        if self.drop_monitor is None:
+            log.warning("drop_monitor_disabled", extra={"config": "config/bridge.yaml drop_monitor.enabled"})
+            return True
+        return self.drop_monitor.start(CONNECT_TIMEOUT_S)
 
     def start_mqtt(self) -> bool:
         client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=self.args.client_id)
@@ -420,6 +439,8 @@ class Bridge:
                 return "duration"
             if self.args.count is not None and self.stats.received >= self.args.count:
                 return "count"
+            if self.drop_monitor is not None:
+                self.drop_monitor.check_silence(time.monotonic())
             try:
                 item = self.inbox.get(timeout=0.1)
             except queue.Empty:
@@ -430,6 +451,8 @@ class Bridge:
         if self.mqtt is not None:
             self.mqtt.disconnect()
             self.mqtt.loop_stop()
+        if self.drop_monitor is not None:
+            self.drop_monitor.stop()
         # Anything still queued is processed while the delivery-report thread
         # runs, unless the run ended at --count or because that thread failed.
         unprocessed = 0
@@ -452,7 +475,9 @@ class Bridge:
                 log.error("flush_failed", extra={"error": f"{type(e).__name__}: {e}"})
                 remaining = len(self.producer)  # messages still in the producer queue
         summary = {"reason": reason, **self.stats.as_dict(), "messages_unprocessed": unprocessed,
-                   "messages_undelivered_at_exit": remaining}
+                   "messages_undelivered_at_exit": remaining,
+                   # Broker-wide, as logged by mqtt_messages_dropped; None with the monitor disabled.
+                   "mosquitto_dropped_during_run": self.drop_monitor.dropped_during_run if self.drop_monitor else None}
         complete = (remaining == 0 and self.stats.delivery_failed == 0 and self.stats.dlq_failed == 0
                     and not self.reports_failed.is_set())
         if reason == "startup_failed":
@@ -494,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
         bridge.shutdown("startup_failed")
         return 1
     bridge.start_delivery_reports()
-    if not bridge.start_mqtt():
+    if not (bridge.start_drop_monitor() and bridge.start_mqtt()):
         bridge.shutdown("startup_failed")
         return 1
     log.info("run_started", extra={"count": args.count, "duration_s": args.duration,

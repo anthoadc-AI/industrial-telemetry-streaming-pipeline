@@ -184,6 +184,8 @@ class ThingsBoardConfig:
 class BridgeConfig:
     # librdkafka settings for the bridge's producer (bridge.yaml), as written.
     producer: Mapping[str, str | int | float | bool]
+    # The bridge watches Mosquitto's dropped-messages counter (bridge.yaml drop_monitor.enabled, DETENTE 3.3.h).
+    drop_monitor_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -521,7 +523,7 @@ BRIDGE_MANAGED_PRODUCER_KEYS = frozenset({"bootstrap.servers", "metadata.broker.
 
 def _parse_bridge(data: Mapping[str, Any]) -> BridgeConfig:
     w = "bridge.yaml"
-    _keys(data, w, {"producer"})
+    _keys(data, w, {"producer"}, {"drop_monitor"})
     producer = _mapping(data["producer"], f"{w}.producer")
     settings: dict[str, str | int | float | bool] = {}
     for key, value in producer.items():
@@ -534,7 +536,9 @@ def _parse_bridge(data: Mapping[str, Any]) -> BridgeConfig:
         if not isinstance(value, (str, int, float, bool)) or value == "":
             raise ConfigError(f"{kw}: expected a string, number or boolean")
         settings[key] = value
-    return BridgeConfig(_frozen(settings))
+    drop_monitor = _mapping(_absent_as(data.get("drop_monitor"), {"enabled": True}), f"{w}.drop_monitor")
+    _keys(drop_monitor, f"{w}.drop_monitor", {"enabled"})
+    return BridgeConfig(_frozen(settings), _bool(drop_monitor["enabled"], f"{w}.drop_monitor.enabled"))
 
 
 def load_config(config_dir: Path | None = None, env: Mapping[str, str] | None = None) -> Config:

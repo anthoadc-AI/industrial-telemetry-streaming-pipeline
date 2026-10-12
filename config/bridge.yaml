@@ -14,3 +14,15 @@ producer:
   # linger.ms: the bridge's code is never changed for that.
   acks: all
   enable.idempotence: true
+
+# Mosquitto's dropped-messages counter (DETENTE 3.3.h). Mosquitto keeps a
+# finite queue for each subscribed client (broker/mosquitto/mosquitto.conf);
+# past it, it drops new messages for that client and still acknowledges the
+# publisher. When enabled, the bridge subscribes to
+# $SYS/broker/publish/messages/dropped on a connection of its own, logs every
+# increase as mqtt_messages_dropped at ERROR with the increase, and refuses to
+# start if it cannot subscribe. The counter is broker-wide (it counts drops for
+# any client, not only the bridge) and Mosquitto updates it every 10 s
+# (sys_interval), so a drop is logged up to 10 s after it happens.
+drop_monitor:
+  enabled: true

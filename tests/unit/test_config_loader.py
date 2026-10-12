@@ -106,6 +106,30 @@ def test_bridge_producer_must_be_a_mapping(tmp_path):
     assert str(info.value) == "bridge.yaml.producer: expected a mapping, got list"
 
 
+def test_bridge_drop_monitor_is_enabled_by_default(cfg, tmp_path):
+    # DETENTE 3.3.h: enabled in config/bridge.yaml, and enabled when the key is absent.
+    assert cfg.bridge.drop_monitor_enabled is True
+    absent = broken(tmp_path, "bridge.yaml", "drop_monitor:\n  enabled: true", "")
+    assert load_config(absent, env={}).bridge.drop_monitor_enabled is True
+
+
+def test_bridge_drop_monitor_can_be_disabled(tmp_path):
+    target = broken(tmp_path, "bridge.yaml", "  enabled: true", "  enabled: false")
+    assert load_config(target, env={}).bridge.drop_monitor_enabled is False
+
+
+@pytest.mark.parametrize("old, new, message", [
+    ("  enabled: true", "  enabled: yes please", "bridge.yaml.drop_monitor.enabled: expected true or false"),
+    ("  enabled: true", "  enabled: true\n  topic: x", "bridge.yaml.drop_monitor: unknown key(s) ['topic']"),
+    ("  enabled: true", "  active: true", "bridge.yaml.drop_monitor: missing key(s) ['enabled']"),
+    ("drop_monitor:\n  enabled: true", "drop_monitor: [enabled]", "bridge.yaml.drop_monitor: expected a mapping, got list"),
+])
+def test_bridge_drop_monitor_rejections(tmp_path, old, new, message):
+    with pytest.raises(ConfigError) as info:
+        load_config(broken(tmp_path, "bridge.yaml", old, new), env={})
+    assert str(info.value) == message
+
+
 def broken(tmp_path: Path, file: str, old: str, new: str) -> Path:
     target = tmp_path / "config"
     shutil.copytree(REPO_ROOT / "config", target, ignore=shutil.ignore_patterns("__pycache__", "*.py"))
