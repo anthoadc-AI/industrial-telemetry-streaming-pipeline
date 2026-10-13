@@ -26,6 +26,7 @@ Comprobación automática: `tests/unit/test_public_docs.py` compara la tabla de 
 | F3 | 2000 msg/s, 5 de 5; 3000 no medible válidamente, generador al límite; sin paso intermedio | informe:39-45, 54, 66 (test) |
 | F3 | bridge a INFO, su nivel por defecto | informe:37, 154 |
 | F1 | desde el instante programado: una parada del generador cuenta como latencia | informe:152 |
+| F2 | 300 muestras por corrida, pocas para un p99 | Anthony, DETENTE 3.5.b; el informe imprime "-" (informe:29) |
 | F2 | patrón de fallo fijo; termina en el ack de Kafka, antes de ThingsBoard | informe:153; salida de `make bench-report` ("F2 alarm: the triggering sample's ts to the alarm consumer's acknowledgement") |
 | ThingsBoard | 10 msg/s por activo por configuración; F5-F7 no medidas | ARCH:437, 448; informe:160 |
 | Hallazgo 1 | 1040 mensajes por cliente, medido; 61,140 descartados a 3000 msg/s | informe:107, 110 |
@@ -51,7 +52,7 @@ Comprobación automática: `tests/unit/test_public_docs.py` compara la tabla de 
 | Capturas | fecha, contenido de cada una | Anthony (2026-10-13), comprobado mirando las imágenes |
 | Capturas | escalón de 4 mm/s hasta ~6,5 mm/s; resto de canales con su deriva normal | `config/telemetry.yaml` (`imbalance.magnitude`, comentario de 6,5 mm/s); `docs/internal/phase3_backlog.md:62` |
 | Lógica de alarmas | HI/HIHI al estilo ISA-18.2; persistencia e histéresis | ARCH:210-214, 252-256 |
-| Lógica de alarmas | 4,5 y 7,1 mm/s, ISO 20816-3, Grupo 2, soportes flexibles; no derivados; temperatura y corriente ilustrativos | ARCH:234; enlace externo `https://www.iso.org/standard/78311.html` (página de ISO 20816-3:2022, consultada el 2026-10-13) |
+| Lógica de alarmas | 4,5 y 7,1 mm/s, ISO 20816-3, Grupo 2, soportes flexibles; no derivados; temperatura y corriente ilustrativos | ARCH:234; enlace externo `https://www.iso.org/standard/78311.html` (página de ISO 20816-3:2022, edición 1, 2022-10; título y edición comprobados el 2026-10-13) |
 | Lógica de alarmas | cada fallo cambia un canal | `config/telemetry.yaml` (`faults`) |
 | Verificación | cuatro jobs; full solo en main | ARCH:558-565 |
 | Verificación | run 38472910691, `c576f2b`, 2026-10-13, cuatro jobs en verde | `gh run view 38472910691` |

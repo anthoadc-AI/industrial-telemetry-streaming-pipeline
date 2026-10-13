@@ -54,8 +54,7 @@ problems a plant has.
 it shows the wrong state. Kafka orders records only within a partition, so every record of a machine must land in
 the same partition. Telemetry is keyed by machine. Alarm events are keyed by alarm, which compaction needs, but
 partitioned by machine (section 5 of the architecture document). With Kafka's default partitioner, one machine's
-alarms spread over partitions; in a replay measured during the project, only 19 of 48 alarms were kept
-after a replay. An integration test now requires every alarm of a machine to share one partition.
+alarms spread over partitions; in a replay measured during the project, only 19 of 48 alarms were kept. An integration test now requires every alarm of a machine to share one partition.
 
 **Persistence and hysteresis.** A reading that crosses a threshold once is noise as often as it is a fault. Each
 alarm raises only after several consecutive samples above its threshold (three for temperature, five for vibration

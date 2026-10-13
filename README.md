@@ -71,8 +71,8 @@ real networks, a replicated disk-backed Kafka, or runs of hours.
   message at INFO, its default. The next step, 3000 msg/s, could not be measured validly: the load generator itself
   reached its CPU limit. No rate between the two was measured.
 - **F1** starts at the sample's scheduled instant, so a stall of the load generator counts as pipeline latency.
-  **F2** uses a fixed fault pattern and ends when Kafka acknowledges the alarm event, before ThingsBoard. The
-  report gives no p99 for it.
+  **F2** uses a fixed fault pattern and ends when Kafka acknowledges the alarm event, before ThingsBoard. Its 300
+  samples per run are too few for a p99.
 - **ThingsBoard is not in these figures.** Its path is limited to 10 msg/s per asset by configuration, and its
   latency and ceiling were not measured.
 
@@ -138,7 +138,7 @@ make down              # stop everything; named volumes are kept
   the pipeline processes run on the host, for development.
 
 **Live data on the dashboard.** With the pipeline running, start the simulator with the two faults of the captures
-below, five minutes after start, so the charts show the change:
+below. The `:300` in each `--fault` injects the fault 300 s after the simulator starts, so the charts show the step:
 
 ```
 # on the host (Windows: ./.venv/Scripts/python.exe)
