@@ -22,3 +22,6 @@ smoke-logs/
 smoke-logs-containers/
 # Benchmark raw samples and logs stay local (owner decision D-H); results are versioned.
 bench/results/*/raw/
+
+# Public documentation images are versioned on purpose
+!docs/images/*.png
