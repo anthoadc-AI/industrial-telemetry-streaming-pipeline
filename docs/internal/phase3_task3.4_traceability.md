@@ -1,6 +1,6 @@
 # Task 3.4: tabla de trazabilidad de `docs/ARCHITECTURE.md`
 
-Cada afirmación sobre el comportamiento del sistema que hace el documento, con su evidencia en el repo. Las líneas son las de la rama `docs/phase3-architecture` en el commit que añade este fichero. Algunas afirmaciones se repiten en varias secciones del documento; aparecen aquí una vez, en la primera.
+Cada afirmación sobre el comportamiento del sistema que hace el documento, con su evidencia en el repo. Las líneas son las de la rama `docs/phase3-architecture` en el commit que añade este fichero, actualizadas en los commits posteriores de la rama que las mueven. Algunas afirmaciones se repiten en varias secciones del documento; aparecen aquí una vez, en la primera.
 
 Tipos de evidencia:
 - **cfg**: fichero de configuración o compose.
@@ -8,6 +8,7 @@ Tipos de evidencia:
 - **test**: test automático.
 - **vivo**: consulta a un sistema en marcha, con el comando y la salida.
 - **int**: documento interno.
+- **ext**: referencia externa que no está en el repositorio, comprobada por el dueño del proyecto. No es evidencia del repo.
 
 Lo que solo sale de leer el código, sin test que lo ejercite, se marca "sin test". El documento lo dice igual.
 
@@ -22,7 +23,7 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 1.3 | Un broker, RF 1, una instancia de cada componente | `config/topics.yaml` (`replication_factor: 1`); servicios únicos en `docker-compose.yml` | cfg |
 | 1.4 | Cinco activos, cuatro canales, modelo físico | `config/telemetry.yaml` (`assets`, `channels`); `edge/simulator/model.py` | cfg, cód |
 | 1.5 | Dos modos de fallo: `bearing_overheating` (rampa, temperatura) e `imbalance` (escalón, vibración) | `config/telemetry.yaml:95-113` | cfg |
-| 1.6 | Los umbrales son ilustrativos y elegidos para los datos sintéticos | `config/alarms.yaml:3-6` | cfg |
+| 1.6 | Umbrales elegidos para los datos sintéticos; temperatura y corriente ilustrativos; vibración coincide con límites de zona de una norma (ver 6.17) | `config/alarms.yaml:3-14` | cfg |
 | 1.7 | `synthetic` en cada registro de telemetría y de alarma; `injected_fault` | `schemas/telemetry_v1.avsc`, `schemas/alarm_v1.avsc`; `edge/simulator/__main__.py:239-241`; `state_machine.js:114` (`synthetic` en el evento) | cód |
 | 1.8 | Punto de partida: el trabajo del Módulo 24 de un curso de MIT xPRO, en el tag `v0-coursework`; contenido de sus tres carpetas | `git show v0-coursework` (mensaje del tag y del commit `aac0d8c`); `git ls-tree -r --name-only v0-coursework`; `Project_24_MQTT/paho-mqtt/TBpublish.py:23` en el tag (`random.randint`) | git |
 | 1.9 | `bench/` es el arnés del benchmark, no parte del pipeline; resultados y reporte | `bench/__init__.py:1`; `bench/results/README.md:1-3`; `docs/internal/phase3_task3.3_closure_report.en.md:1-5` | cód, int |
@@ -65,8 +66,8 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | # | Afirmación | Evidencia | Tipo |
 |---|---|---|---|
 | 6.1 | HI y HIHI independientes, cada una con su estado y su `alarm_id` | `processing/alarm_consumer/state_machine.js:3-12`, `44-62`, `120-130` | cód |
-| 6.2 | Tablas de umbrales | `config/alarms.yaml:17-46`; `test_architecture_doc.py::test_threshold_tables_match_alarms_config` | cfg, test |
-| 6.3 | `speed_rpm` sin alarma | `config/alarms.yaml:15` | cfg |
+| 6.2 | Tablas de umbrales | `config/alarms.yaml:25-54`; `test_architecture_doc.py::test_threshold_tables_match_alarms_config` | cfg, test |
+| 6.3 | `speed_rpm` sin alarma | `config/alarms.yaml:23` | cfg |
 | 6.4 | Transiciones NORMAL/ACTIVE con persistencia e histéresis | `state_machine.js:13-21`, `64-92`; `tests/unit/state_machine.test.js` | cód, test |
 | 6.5 | Rupturas de racha: hueco o retroceso de `seq`, valor nulo o no finito; contadores a cero, estado sin cambio | `state_machine.js:27-31`, `152-170`; `state_machine.test.js` | cód, test |
 | 6.6 | Sin debounce temporal ni limpieza periódica | `state_machine.js:22-25` | cód |
@@ -80,6 +81,7 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 6.14 | Tipo de alarma `<label> high (warning|critical)` | `processing/thingsboard_sink/__main__.py:144-146` | cód |
 | 6.15 | Rama Failure → `alarm_mapping_failed`, sin retener al activo | `alarm-mapping.json:198`; `test_a_mapping_failure_is_recorded_and_does_not_hold_back_the_asset` | cód, test |
 | 6.16 | Reconciliación en `make up` | `Makefile:84-87`; `scripts/thingsboard/import_rule_chains.py:522-555`; `test_make_up_reconciliation_clears_an_alarm_lost_with_kafka` | cód, test |
+| 6.17 | Los umbrales de vibración (4.5 y 7.1 mm/s RMS) coinciden con los límites de zona B/C y C/D de ISO 20816-3 (antes ISO 10816-3), Grupo 2 (15 kW a 300 kW), soportes flexibles; en soportes rígidos, 2.8 y 4.5 mm/s; sin fuente registrada al elegirlos | **Referencia externa comprobada por el dueño del proyecto (DETENTE 3.4.b), no evidencia del repositorio:** la norma no está en el repositorio. En el repo solo constan los valores (`config/alarms.yaml:34-35`) y el comentario que repite esta afirmación (`config/alarms.yaml:7-14`) | ext |
 
 ## 7. Garantías de entrega
 

@@ -32,7 +32,7 @@ The document covers what each part does, how data moves, what is guaranteed at e
 **What the system is.**
 - A local pipeline on one host, started with Docker Compose.
 - One Kafka broker with replication factor 1, one Mosquitto broker and one ThingsBoard instance.
-- It started from the coursework of Module 24 of an MIT xPRO course, preserved at the tag `v0-coursework`. That tag holds the three course folders as found: a Mosquitto broker stack; a ThingsBoard stack with a paho-mqtt publisher of random temperature and humidity values (its rule chains, which forwarded to Firebase, lived in the ThingsBoard database and are not in the tag); and a Confluent Platform 6.1.1 stack with a Python producer of vehicle coordinates and a Node.js kafkajs consumer. The pipeline described here was rebuilt from that starting point; section 12 says what was kept from it.
+- It started from the coursework of MIT xPRO Data Engineering, Module 24, "Handling Big Data with Mosquitto, ThingsBoard, and Kafka", preserved at the tag `v0-coursework`. That tag holds the three course folders as found: a Mosquitto broker stack; a ThingsBoard stack with a paho-mqtt publisher of random temperature and humidity values (its rule chains, which forwarded to Firebase, lived in the ThingsBoard database and are not in the tag); and a Confluent Platform 6.1.1 stack with a Python producer of vehicle coordinates and a Node.js kafkajs consumer. The pipeline described here was rebuilt from that starting point; section 12 says what was kept from it.
 - `bench/` is the benchmark harness used to measure the pipeline. It is not part of the pipeline. Its results are in `bench/results/` and its report is `docs/internal/phase3_task3.3_closure_report.en.md`.
 
 **What it is not.**
@@ -45,7 +45,7 @@ The document covers what each part does, how data moves, what is guaranteed at e
 - Two injectable fault modes in `config/telemetry.yaml`:
   - `bearing_overheating`: a ramp on bearing temperature;
   - `imbalance`: a step on vibration.
-- Alarm thresholds in `config/alarms.yaml`. The file states that they are illustrative values chosen for this synthetic data.
+- Alarm thresholds in `config/alarms.yaml`, chosen for this synthetic data. The temperature and current thresholds are illustrative; the vibration thresholds coincide with zone boundaries of a published standard (section 6).
 - Two fields carry this through the pipeline:
   - `synthetic` is set on every telemetry and alarm record;
   - `injected_fault` names the fault the simulator applied to a sample (simulation ground truth).
@@ -230,6 +230,8 @@ Each one has its own state and its own `alarm_id`. A value above both raises WAR
 | `pump-01` | 31.5 | 36.0 |
 | `pump-02` | 31.5 | 36.0 |
 | `compressor-01` | 126.0 | 144.0 |
+
+The vibration thresholds, 4.5 and 7.1 mm/s RMS, coincide with the B/C and C/D zone boundaries that ISO 20816-3 (formerly ISO 10816-3) gives for Group 2 machines (15 kW to 300 kW) on flexible supports. No source was recorded when they were chosen, and they were not derived from an assessment of these synthetic assets, whose power rating and support type the repository does not define; on rigid supports the same standard gives 2.8 and 4.5 mm/s. The temperature and current thresholds are illustrative values.
 
 `speed_rpm` is not alarmed.
 
