@@ -8,7 +8,7 @@ Tipos de evidencia:
 - **test**: test automático.
 - **vivo**: consulta a un sistema en marcha, con el comando y la salida.
 - **int**: documento interno.
-- **ext**: referencia externa que no está en el repositorio, comprobada por el dueño del proyecto. No es evidencia del repo.
+- **ext**: referencia externa que no está en el repositorio, aprobada por el dueño del proyecto. No es evidencia del repo.
 
 Lo que solo sale de leer el código, sin test que lo ejercite, se marca "sin test". El documento lo dice igual.
 
@@ -81,7 +81,7 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 6.14 | Tipo de alarma `<label> high (warning|critical)` | `processing/thingsboard_sink/__main__.py:144-146` | cód |
 | 6.15 | Rama Failure → `alarm_mapping_failed`, sin retener al activo | `alarm-mapping.json:198`; `test_a_mapping_failure_is_recorded_and_does_not_hold_back_the_asset` | cód, test |
 | 6.16 | Reconciliación en `make up` | `Makefile:84-87`; `scripts/thingsboard/import_rule_chains.py:522-555`; `test_make_up_reconciliation_clears_an_alarm_lost_with_kafka` | cód, test |
-| 6.17 | Los umbrales de vibración (4.5 y 7.1 mm/s RMS) coinciden con los límites de zona B/C y C/D de ISO 20816-3 (antes ISO 10816-3), Grupo 2 (15 kW a 300 kW), soportes flexibles; en soportes rígidos, 2.8 y 4.5 mm/s; sin fuente registrada al elegirlos | **Referencia externa comprobada por el dueño del proyecto (DETENTE 3.4.b), no evidencia del repositorio:** la norma no está en el repositorio. En el repo solo constan los valores (`config/alarms.yaml:34-35`) y el comentario que repite esta afirmación (`config/alarms.yaml:7-14`) | ext |
+| 6.17 | Los umbrales de vibración (4.5 y 7.1 mm/s RMS) coinciden con los límites de zona B/C y C/D de ISO 20816-3 (antes ISO 10816-3), Grupo 2 (15 kW a 300 kW), soportes flexibles; en soportes rígidos, 2.8 y 4.5 mm/s; sin fuente registrada al elegirlos | **Referencia externa, no evidencia del repositorio.** Afirmación aprobada por el dueño del proyecto (DETENTE 3.4.b) y comprobada contra fuentes secundarias que reproducen las tablas A.1 y A.2 de la norma; no se consultó el texto de la propia norma, que no está en el repositorio. En el repo solo constan los valores (`config/alarms.yaml:34-35`) y el comentario que repite esta afirmación (`config/alarms.yaml:7-14`) | ext |
 
 ## 7. Garantías de entrega
 
