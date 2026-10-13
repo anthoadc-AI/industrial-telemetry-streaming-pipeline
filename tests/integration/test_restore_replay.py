@@ -1,25 +1,30 @@
-"""Integration: a restored ACTIVE alarm meets a replay of the samples that preceded its raise (Task 3.4, H3).
+"""Integration: a replay of samples that an alarm's latest event already accounts for (Task 3.4, H3, and its fix).
 
 The alarm consumer's offsets are committed by kafkajs after the handlers of a fetched batch have returned
-(processing/alarm_consumer/consumer.js, runConsumer, autoCommit). A stop between the RAISED send and that commit
-(a crash, a kill, or the documented stop on a failed send later in the batch) leaves the RAISED event in
-telemetry.alarms and the committed offset before the samples that raised it. On restart the consumer restores
-the alarm as ACTIVE with its counters at zero (state_machine.js, restoreActive) and processes those samples again,
-starting with any normal samples of the same batch that came before the raise.
+(processing/alarm_consumer/consumer.js, runConsumer, autoCommit). A stop between an alarm send and that commit
+(a crash, a kill, or the documented stop on a failed send later in the batch) leaves the event in telemetry.alarms
+and the committed offset before the samples that caused it. On restart the consumer restores each level alarm from
+its latest event and processes those samples again.
 
-The test builds that state without timing a crash: consumer A processes NORMAL normal samples and then PERSISTENCE
-high samples of one asset and raises one alarm; the group's committed offset on telemetry.raw is then moved back
-to before those samples, which is what an uncommitted batch leaves; consumer B starts in the same group.
+The tests build that state without timing a crash: a first consumer processes the samples and emits the event; the
+group's committed offset on telemetry.raw is then moved back to before them, which is what an uncommitted batch
+leaves; a second consumer starts in the same group.
 
-Observed (2026-10-12) and pinned here as a known defect: consumer B emits a CLEARED for the restored alarm_id,
-stamped with a sample that precedes the raise, and then the same RAISED again. telemetry.alarms ends with RAISED
-as the latest record of that key, so a later restore is right; ThingsBoard is not (see the full-profile test):
-AlarmMapping applies the CLEARED, because it has the raised_ts of the alarm it holds, and drops the second RAISED
-as a replay, so the alarm shows cleared while the condition still holds. When the consumer is fixed, these tests
-fail and must change with docs/ARCHITECTURE.md (section "Alarm logic") and the backlog item.
+Before the fix (found in the architecture review, 2026-10-12, and while fixing it, 2026-10-13):
+- H3: a restored ACTIVE alarm met the normal samples before its raise and emitted a CLEARED stamped before the raise,
+  then the same RAISED again. ThingsBoard applied the CLEARED and dropped the rest: the alarm showed cleared while the
+  condition still held.
+- Phantom alarm: an alarm raised in a committed batch and cleared in an uncommitted one was restored NORMAL; the
+  replayed high samples raised it again under a new alarm_id, then cleared it.
 
-Asset and alarm type: pump-02, bearing temperature WARNING, used by no other test, with timestamps of the current
-time, so AlarmMapping's "newer than the last applied" rule does not couple this test to another.
+The fix (state_machine.js, replay guard): a sample stamped at or before an alarm's latest event, RAISED or CLEARED,
+does not count for that alarm. These tests require the correct behaviour; they fail against the code before the fix.
+
+Asset and alarm type: pump-02, bearing temperature WARNING, used by no other test. Each test stamps its samples after
+the latest event of that alarm type already in telemetry.alarms (start_ms), and never before the current time: the
+replay guard ignores samples at or before that event, and AlarmMapping applies only alarms newer than the last one.
+The samples are one second apart and produced at once, so a test writes events up to about ten seconds ahead of the
+clock; the next test must start after them, not merely after the current time.
 """
 
 from __future__ import annotations
@@ -41,6 +46,21 @@ NORMAL = PERSISTENCE + 2  # enough normal samples before the raise to meet the c
 LOW = RULE.warning - RULE.hysteresis - 20.0  # below the clear level
 HIGH = RULE.warning + 5.0  # at or above the warning threshold, below critical
 assert HIGH < RULE.critical
+GUARD_KEY = f"{ASSET}/{CHANNEL}"
+
+
+def start_ms() -> int:
+    """A first sample time after every event of this alarm type in telemetry.alarms, and not before now."""
+    c = Consumer({"bootstrap.servers": it.BOOTSTRAP, "group.id": it.unique("it-wm"), "enable.auto.commit": False})
+    try:
+        meta = c.list_topics("telemetry.alarms", timeout=10).topics["telemetry.alarms"]
+        low = {p: c.get_watermark_offsets(TopicPartition("telemetry.alarms", p), timeout=10)[0] for p in meta.partitions}
+    finally:
+        c.close()
+    prefix = f"{ASSET}/{CHANNEL}/{SEVERITY}/"
+    stamps = [int(r["value"]["ts"].timestamp() * 1000) for r in it.read_since("telemetry.alarms", low)
+              if r["key"] and r["key"].decode().startswith(prefix) and r["value"]]
+    return max([int(time.time() * 1000), *(s + 1000 for s in stamps)])
 
 
 def samples(base_seq: int, base_ms: int, values: list[float]) -> list[dict]:
@@ -74,87 +94,123 @@ def alarm_records(mark: dict[int, int]) -> list[tuple[str, str, int]]:
             for r in sorted(records, key=lambda r: r["offset"])]
 
 
-def raise_then_replay(log_dir, group: str, base_seq: int, base_ms: int) -> tuple[str, list[dict]]:
+def consume(log_dir, name: str, group: str, records: list[dict], produce: bool = True):
+    """One alarm consumer in group, stopped after len(records) messages; produces the records first if asked."""
+    proc = it.alarm_consumer(log_dir, name, group, count=len(records), duration=300)
+    if produce:
+        it.produce_telemetry(records)
+    assert proc.finish(120) == 0
+    assert proc.non_json_lines() == 0
+    return proc
+
+
+def skipped(proc) -> int:
+    """Samples of this asset and channel that the consumer's replay guard skipped (run_finished)."""
+    [finished] = proc.find("run_finished")
+    return finished["samples_skipped_by_replay_guard"].get(GUARD_KEY, 0)
+
+
+def raise_then_replay(log_dir, group: str, base_seq: int, base_ms: int) -> tuple[str, object]:
     """Consumer A raises one alarm; the offset goes back before its samples; consumer B restores and replays.
 
-    Returns the alarm_id and consumer B's transitions."""
+    Returns the alarm_id and consumer B."""
     records = samples(base_seq, base_ms, [LOW] * NORMAL + [HIGH] * PERSISTENCE)
     before = it.watermarks("telemetry.raw")
-    a = it.alarm_consumer(log_dir, "consumer-a", group, count=len(records), duration=300)
-    it.produce_telemetry(records)
-    assert a.finish(120) == 0
-    raised = transitions(a)
+    a = consume(log_dir, "consumer-a", group, records)
     alarm_id = f"{ASSET}/{CHANNEL}/{SEVERITY}/{base_ms + (NORMAL + PERSISTENCE - 1) * 1000}"
-    assert [(e["event"], e["alarm_id"]) for e in raised] == [("alarm_raised", alarm_id)]
+    assert [(e["event"], e["alarm_id"]) for e in transitions(a)] == [("alarm_raised", alarm_id)]
     assert it.committed(group, "telemetry.raw") == it.watermarks("telemetry.raw")
 
     commit_at(group, "telemetry.raw", before)
     b = it.alarm_consumer(log_dir, "consumer-b", group, count=len(records), duration=300)
     assert alarm_id in b.find("alarms_restored")[0]["alarm_ids"]
     assert b.finish(120) == 0
-    assert all(p.non_json_lines() == 0 for p in (a, b))
-    return alarm_id, transitions(b)
+    assert b.non_json_lines() == 0
+    return alarm_id, b
 
 
 def clear(log_dir, group: str, base_seq: int, base_ms: int, alarm_id: str) -> None:
     """Normal samples after the replay: a new consumer in the group clears the alarm, leaving no active alarm behind."""
     records = samples(base_seq + NORMAL + PERSISTENCE, base_ms + (NORMAL + PERSISTENCE) * 1000, [LOW] * PERSISTENCE)
-    c = it.alarm_consumer(log_dir, "consumer-c", group, count=len(records), duration=300)
-    it.produce_telemetry(records)
-    assert c.finish(120) == 0
+    c = consume(log_dir, "consumer-c", group, records)
     assert [(e["event"], e["alarm_id"]) for e in transitions(c)] == [("alarm_cleared", alarm_id)]
 
 
-def expected_replay(alarm_id: str, base_seq: int) -> list[tuple[str, str, int]]:
-    """The known defect: a CLEARED stamped with the PERSISTENCE-th normal sample, then the same RAISED again."""
-    return [(alarm_id, "CLEARED", base_seq + PERSISTENCE - 1), (alarm_id, "RAISED", base_seq + NORMAL + PERSISTENCE - 1)]
-
-
-def test_replay_before_the_raise_emits_a_spurious_clear(stack, offsets_mark, fresh_group, log_dir):
+def test_replay_before_the_raise_does_not_clear_the_restored_alarm(stack, offsets_mark, fresh_group, log_dir):
     group = fresh_group()
-    base_seq, base_ms = int(time.time() * 1000), int(time.time() * 1000)
-    alarm_id, replayed = raise_then_replay(log_dir, group, base_seq, base_ms)
+    base_ms = start_ms()
+    base_seq = base_ms
+    raised_seq = base_seq + NORMAL + PERSISTENCE - 1
+    alarm_id, b = raise_then_replay(log_dir, group, base_seq, base_ms)
 
-    assert [(e["alarm_id"], "CLEARED" if e["event"] == "alarm_cleared" else "RAISED", e["source_seq"])
-            for e in replayed] == expected_replay(alarm_id, base_seq)
-    # The spurious CLEARED is stamped before the alarm's own raise.
-    assert int(replayed[0]["sample_ts"]) < int(alarm_id.rsplit("/", 1)[1])
-    written = alarm_records(offsets_mark["telemetry.alarms"])
-    assert written == [(alarm_id, "RAISED", base_seq + NORMAL + PERSISTENCE - 1)] + expected_replay(alarm_id, base_seq)
-    # The latest record of the key is RAISED, so the next restore still finds the alarm active.
-    assert written[-1][1] == "RAISED"
+    # The replay emits nothing: every replayed sample is at or before the restored RAISED.
+    assert transitions(b) == []
+    assert skipped(b) == NORMAL + PERSISTENCE
+    assert alarm_records(offsets_mark["telemetry.alarms"]) == [(alarm_id, "RAISED", raised_seq)]
 
+    # The real clear comes later, with the restored alarm_id and a sample after the raise.
     clear(log_dir, group, base_seq, base_ms, alarm_id)
+    cleared_seq = base_seq + NORMAL + 2 * PERSISTENCE - 1
+    assert alarm_records(offsets_mark["telemetry.alarms"]) == [(alarm_id, "RAISED", raised_seq),
+                                                               (alarm_id, "CLEARED", cleared_seq)]
+
+
+def test_replay_of_a_clear_does_not_raise_a_phantom_alarm(stack, offsets_mark, fresh_group, log_dir):
+    group = fresh_group()
+    base_ms = start_ms()
+    base_seq = base_ms
+    # A committed batch raises the alarm.
+    raising = samples(base_seq, base_ms, [HIGH] * PERSISTENCE)
+    a = consume(log_dir, "consumer-a", group, raising)
+    alarm_id = f"{ASSET}/{CHANNEL}/{SEVERITY}/{base_ms + (PERSISTENCE - 1) * 1000}"
+    assert [(e["event"], e["alarm_id"]) for e in transitions(a)] == [("alarm_raised", alarm_id)]
+
+    # The next batch keeps the value high, then clears the alarm; its offsets are then moved back.
+    before = it.watermarks("telemetry.raw")
+    clearing = samples(base_seq + PERSISTENCE, base_ms + PERSISTENCE * 1000, [HIGH] * (PERSISTENCE + 1) + [LOW] * PERSISTENCE)
+    a2 = consume(log_dir, "consumer-a2", group, clearing)
+    assert [(e["event"], e["alarm_id"]) for e in transitions(a2)] == [("alarm_cleared", alarm_id)]
+    commit_at(group, "telemetry.raw", before)
+
+    # The replay starts from the CLEARED: the high samples before it do not raise a new alarm.
+    b = consume(log_dir, "consumer-b", group, clearing, produce=False)
+    assert alarm_id not in b.find("alarms_restored")[0]["alarm_ids"]
+    assert transitions(b) == []
+    assert skipped(b) == len(clearing)
+    cleared_seq = base_seq + 2 * PERSISTENCE + PERSISTENCE
+    assert alarm_records(offsets_mark["telemetry.alarms"]) == [(alarm_id, "RAISED", base_seq + PERSISTENCE - 1),
+                                                               (alarm_id, "CLEARED", cleared_seq)]
 
 
 @pytest.mark.full
-def test_after_the_replay_thingsboard_shows_the_alarm_cleared_while_it_is_active(stack, offsets_mark, fresh_group,
-                                                                                  log_dir):
+def test_after_the_replay_thingsboard_keeps_the_alarm_active_until_the_real_clear(stack, offsets_mark, fresh_group,
+                                                                                    log_dir):
     tb = it.thingsboard()
     group = fresh_group()
-    base_seq, base_ms = int(time.time() * 1000), int(time.time() * 1000)
+    base_ms = start_ms()
+    base_seq = base_ms
     alarms_mark = offsets_mark["telemetry.alarms"]
-    alarm_id, replayed = raise_then_replay(log_dir, group, base_seq, base_ms)
-    assert len(replayed) == 2
+    alarm_id, _ = raise_then_replay(log_dir, group, base_seq, base_ms)
 
-    def forward(name: str, count: int) -> None:
-        marks = {"telemetry.alarms": alarms_mark, "telemetry.raw": it.watermarks("telemetry.raw")}
+    def forward(name: str, mark: dict[int, int]) -> None:
+        """A sink forwards every event of this alarm type written after mark (and nothing of telemetry.raw)."""
+        count = len(alarm_records(mark))
+        marks = {"telemetry.alarms": mark, "telemetry.raw": it.watermarks("telemetry.raw")}
         sink = it.thingsboard_sink(log_dir, name, sink_group_at(marks, f"it-sink-{name}"), count=count)
         assert sink.finish(180) == 0
         assert sink.non_json_lines() == 0
 
-    # RAISED, the spurious CLEARED, RAISED again: ThingsBoard applies the first two and drops the third.
-    forward("sink-replay", 3)
+    # Everything the raise and the replay wrote reaches ThingsBoard: the alarm is active and stays active.
+    forward("sink-replay", alarms_mark)
     pump = device(tb, ASSET)["id"]["id"]
-    settled = wait_until(lambda: [a for a in alarms_of(tb, pump, {alarm_id}) if a["status"].startswith("CLEARED")])
-    assert [a["status"] for a in settled] == ["CLEARED_UNACK"], alarms_of(tb, pump, {alarm_id})
-    time.sleep(5)  # the second RAISED has been processed by now; it must not have reopened the alarm
-    assert [a["status"] for a in alarms_of(tb, pump, {alarm_id})] == ["CLEARED_UNACK"]
+    settled = wait_until(lambda: alarms_of(tb, pump, {alarm_id}) or None)
+    assert [a["status"] for a in settled] == ["ACTIVE_UNACK"], settled
+    time.sleep(5)  # anything else forwarded has been processed by now; it must not have cleared the alarm
+    assert [a["status"] for a in alarms_of(tb, pump, {alarm_id})] == ["ACTIVE_UNACK"]
 
-    # The alarm consumer still holds the alarm ACTIVE: its real clear arrives later and is dropped as a replay.
+    # The real clear: ThingsBoard clears the alarm only now.
     alarms_mark = it.watermarks("telemetry.alarms")
     clear(log_dir, group, base_seq, base_ms, alarm_id)
-    forward("sink-clear", 1)
-    time.sleep(5)
-    [alarm] = alarms_of(tb, pump, {alarm_id})
-    assert alarm["status"] == "CLEARED_UNACK"
+    forward("sink-clear", alarms_mark)
+    cleared = wait_until(lambda: [a for a in alarms_of(tb, pump, {alarm_id}) if a["status"].startswith("CLEARED")] or None)
+    assert [a["status"] for a in cleared] == ["CLEARED_UNACK"], alarms_of(tb, pump, {alarm_id})

@@ -195,7 +195,12 @@ def test_alarm_ordering_and_replay_leave_exactly_one_alarm_per_alarm_id(stack, t
     alarm per alarm_id, none active, alarm_last pointing at the newest alarm of each type, and both alarm
     keys kept in the time-series history where they share a timestamp.
     """
-    base = int(time.time() * 1000) + 60_000  # after any alarm an earlier run applied for pump-02
+    # After any alarm an earlier run applied for pump-02. Coupling: these events stay in telemetry.alarms, and the
+    # alarm consumer's replay guard (state_machine.js) takes the latest event of each alarm type as the point up to
+    # which samples are already accounted for. An alarm consumer started later in the same session therefore ignores
+    # pump-02 vibration samples stamped before base + ~40 s. No test sends pump-02 vibration alarms through the
+    # consumer; one that does must use timestamps after that, or another asset or channel.
+    base = int(time.time() * 1000) + 60_000
     events, ids, shared_ts = [], set(), []
     for i in range(40):
         r = base + i * 1000

@@ -152,14 +152,16 @@ async function registerSchema(registry, { topic, schema }) {
 
 /**
  * Read telemetry.alarms from the beginning up to the end offsets taken at
- * start, keep the latest event per alarm_id (the message key), and return
- * the events whose latest state is RAISED: the alarms that are active.
+ * start, keep the latest event per alarm_id (the message key), and return the
+ * latest event per alarm type (asset_id, channel, severity), RAISED or
+ * CLEARED, by ts. A RAISED one is an active alarm; either one is the replay
+ * guard of its level alarm (state_machine.js).
  */
-async function readActiveAlarms({ kafka, admin, registry, alarmsTopic, log }) {
+async function readAlarmState({ kafka, admin, registry, alarmsTopic, log }) {
   const offsets = await admin.fetchTopicOffsets(alarmsTopic);
   const targets = new Map(offsets.filter((o) => Number(o.high) > Number(o.low)).map((o) => [o.partition, Number(o.high)]));
-  const stats = { partitions: offsets.length, records_read: 0, alarms_seen: 0 };
-  if (targets.size === 0) return { active: [], stats };
+  const stats = { partitions: offsets.length, records_read: 0, alarms_seen: 0, alarm_types: 0 };
+  if (targets.size === 0) return { latest: [], stats };
 
   const latest = new Map();
   const consumer = kafka.consumer({ groupId: `alarm-consumer-restore-${process.pid}-${Date.now()}` });
@@ -194,9 +196,14 @@ async function readActiveAlarms({ kafka, admin, registry, alarmsTopic, log }) {
     await consumer.disconnect();
   }
   stats.alarms_seen = latest.size;
-  const active = [...latest.values()].filter((e) => e.state === 'RAISED');
+  const byType = new Map();
+  for (const e of latest.values()) {
+    const type = `${e.asset_id}/${e.channel}/${e.severity}`;
+    if (!byType.has(type) || e.ts > byType.get(type).ts) byType.set(type, e);
+  }
+  stats.alarm_types = byType.size;
   log.debug('restore_read', stats);
-  return { active, stats };
+  return { latest: [...byType.values()], stats };
 }
 
 /**
@@ -386,6 +393,6 @@ function createRegistry(host) {
 }
 
 module.exports = {
-  createKafka, createProducer, createRegistry, checkTopics, registerSchema, readActiveAlarms, runConsumer,
+  createKafka, createProducer, createRegistry, checkTopics, registerSchema, readAlarmState, runConsumer,
   decodeTelemetry, TransientRegistryError, hrWallMs, clockReading, AssetPartitioner, assetOfKey,
 };

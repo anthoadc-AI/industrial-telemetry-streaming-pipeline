@@ -13,7 +13,7 @@ const jsonlog = require('../../common/jsonlog');
 const { Partitioners } = require('kafkajs');
 
 const {
-  decodeTelemetry, runConsumer, readActiveAlarms, checkTopics, registerSchema,
+  decodeTelemetry, runConsumer, readAlarmState, checkTopics, registerSchema,
   createKafka, createProducer, createRegistry, TransientRegistryError, hrWallMs, clockReading,
   AssetPartitioner, assetOfKey,
 } = consumerModule;
@@ -235,7 +235,7 @@ describe('runConsumer handler', () => {
   });
 });
 
-describe('readActiveAlarms', () => {
+describe('readAlarmState', () => {
   function restoreKafka(records) {
     return {
       consumer: jest.fn(() => ({
@@ -249,31 +249,39 @@ describe('readActiveAlarms', () => {
     };
   }
   const registry = { decode: jest.fn(async (buffer) => JSON.parse(buffer.toString())) };
-  const event = (id, state) => ({ alarm_id: id, asset_id: 'pump-01', channel: 'vibration_rms_mm_s', severity: 'WARNING', state });
+  const event = (id, state, ts = 1, severity = 'WARNING') => ({ alarm_id: id, asset_id: 'pump-01', channel: 'vibration_rms_mm_s', severity, state, ts });
   const rec = (partition, offset, ev, key = ev && ev.alarm_id) => ({
     partition, message: { offset: String(offset), key: key ? Buffer.from(key) : null, value: ev ? Buffer.from(JSON.stringify(ev)) : null },
   });
 
-  test('keeps the latest event per alarm_id and returns those still RAISED', async () => {
+  test('keeps the latest event per alarm_id, then the latest per alarm type by ts, RAISED or CLEARED', async () => {
     const records = [
-      rec(0, 0, event('a', 'RAISED')), rec(0, 1, event('a', 'CLEARED')),
-      rec(1, 0, event('b', 'RAISED')),
-      rec(2, 0, event('c', 'RAISED')), rec(2, 1, null, 'c'), // tombstone deletes c
-      rec(5, 0, event('z', 'RAISED')), // a partition not in the target set is ignored
+      rec(0, 0, event('a', 'RAISED', 10)), rec(0, 1, event('a', 'CLEARED', 20)),
+      rec(1, 0, event('b', 'RAISED', 30)), // the same alarm type as a, later: the latest of the type
+      rec(1, 1, event('k', 'RAISED', 5, 'CRITICAL')), rec(1, 2, event('k', 'CLEARED', 15, 'CRITICAL')),
+      rec(2, 0, event('c', 'RAISED', 40, 'CRITICAL')), rec(2, 1, null, 'c'), // tombstone deletes c
+      rec(5, 0, event('z', 'RAISED', 50)), // a partition not in the target set is ignored
     ];
     const admin = { fetchTopicOffsets: jest.fn(async () => [
-      { partition: 0, low: '0', high: '2' }, { partition: 1, low: '0', high: '1' }, { partition: 2, low: '0', high: '2' },
+      { partition: 0, low: '0', high: '2' }, { partition: 1, low: '0', high: '3' }, { partition: 2, low: '0', high: '2' },
     ]) };
-    const { active, stats } = await readActiveAlarms({ kafka: restoreKafka(records), admin, registry, alarmsTopic: 'telemetry.alarms', log: jsonlog.getLogger('t') });
-    expect(active.map((e) => e.alarm_id)).toEqual(['b']);
-    expect(stats).toEqual({ partitions: 3, records_read: 5, alarms_seen: 2 });
+    const { latest, stats } = await readAlarmState({ kafka: restoreKafka(records), admin, registry, alarmsTopic: 'telemetry.alarms', log: jsonlog.getLogger('t') });
+    expect(latest.map((e) => [e.alarm_id, e.state])).toEqual([['b', 'RAISED'], ['k', 'CLEARED']]);
+    expect(stats).toEqual({ partitions: 3, records_read: 7, alarms_seen: 3, alarm_types: 2 });
+  });
+
+  test('an older event of the same type read later does not replace the latest', async () => {
+    const records = [rec(0, 0, event('b', 'RAISED', 30)), rec(0, 1, event('a', 'CLEARED', 20))];
+    const admin = { fetchTopicOffsets: jest.fn(async () => [{ partition: 0, low: '0', high: '2' }]) };
+    const { latest } = await readAlarmState({ kafka: restoreKafka(records), admin, registry, alarmsTopic: 't', log: jsonlog.getLogger('t') });
+    expect(latest.map((e) => e.alarm_id)).toEqual(['b']);
   });
 
   test('an empty topic needs no consumer', async () => {
     const kafka = restoreKafka([]);
     const admin = { fetchTopicOffsets: jest.fn(async () => [{ partition: 0, low: '4', high: '4' }]) };
-    const { active } = await readActiveAlarms({ kafka, admin, registry, alarmsTopic: 't', log: jsonlog.getLogger('t') });
-    expect(active).toEqual([]);
+    const { latest } = await readAlarmState({ kafka, admin, registry, alarmsTopic: 't', log: jsonlog.getLogger('t') });
+    expect(latest).toEqual([]);
     expect(kafka.consumer).not.toHaveBeenCalled();
   });
 
@@ -281,7 +289,7 @@ describe('readActiveAlarms', () => {
     jest.useFakeTimers();
     try {
       const admin = { fetchTopicOffsets: jest.fn(async () => [{ partition: 0, low: '0', high: '9' }]) };
-      const pending = readActiveAlarms({ kafka: restoreKafka([rec(0, 0, event('a', 'RAISED'))]), admin, registry, alarmsTopic: 't', log: jsonlog.getLogger('t') });
+      const pending = readAlarmState({ kafka: restoreKafka([rec(0, 0, event('a', 'RAISED'))]), admin, registry, alarmsTopic: 't', log: jsonlog.getLogger('t') });
       const assertion = expect(pending).rejects.toThrow('did not reach the end of t');
       await jest.advanceTimersByTimeAsync(60001);
       await assertion;

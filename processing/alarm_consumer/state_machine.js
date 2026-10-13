@@ -33,6 +33,22 @@
  * alarm_id is deterministic: asset_id/channel/severity/<ts of the RAISED
  * sample, epoch ms>. Processing the same samples again yields the same id,
  * which is what makes at-least-once delivery deduplicable downstream.
+ *
+ * Replay guard: each level alarm remembers the ts of its latest event, RAISED
+ * or CLEARED, emitted here or restored from telemetry.alarms. A sample stamped
+ * at or before that ts is already accounted for by the event, so it does not
+ * count for that alarm: it changes neither the state nor the counters, and
+ * the engine counts it as skipped. Without the guard, a replay of samples
+ * that preceded the latest event (the consumer stopped after an alarm send
+ * and before its offset commit, so the samples come again after the restore)
+ * re-evaluates history against the restored state: a restored ACTIVE alarm
+ * met earlier normal samples and emitted a CLEARED stamped before its own
+ * raise, then the same RAISED again (Task 3.4, H3); a restored CLEARED alarm
+ * met the high samples before its clear and was raised and cleared again
+ * under a new alarm_id. The guard compares ts, not seq, because seq starts
+ * again at 0 when the simulator restarts. Its cost: if a producer's clock
+ * goes back, that alarm ignores the samples until the time passes its
+ * latest event.
  */
 
 const SEVERITIES = Object.freeze(['WARNING', 'CRITICAL']);
@@ -53,6 +69,12 @@ class LevelAlarm {
     this.alarmId = null;
     this.raiseCount = 0;
     this.clearCount = 0;
+    this.latestEventTs = undefined; // ts of the latest RAISED or CLEARED (replay guard)
+  }
+
+  /** True when the sample is at or before this alarm's latest event: already accounted for. */
+  accountedFor(sample) {
+    return this.latestEventTs !== undefined && sample.ts <= this.latestEventTs;
   }
 
   resetCounters() {
@@ -91,14 +113,22 @@ class LevelAlarm {
     return null;
   }
 
-  /** Mark ACTIVE with a known alarm_id (state rebuilt from telemetry.alarms). */
-  restoreActive(id) {
-    this.state = 'ACTIVE';
-    this.alarmId = id;
+  /**
+   * Rebuild the state from this alarm's latest event in telemetry.alarms:
+   * ACTIVE with its alarm_id after a RAISED, NORMAL after a CLEARED. Either
+   * way the event's ts becomes the replay guard. An event older than one
+   * already applied is ignored.
+   */
+  restoreFrom(ev) {
+    if (this.latestEventTs !== undefined && ev.ts <= this.latestEventTs) return;
+    this.state = ev.state === 'RAISED' ? 'ACTIVE' : 'NORMAL';
+    this.alarmId = ev.state === 'RAISED' ? ev.alarm_id : null;
+    this.latestEventTs = ev.ts;
     this.resetCounters();
   }
 
   event(state, value, sample) {
+    this.latestEventTs = sample.ts;
     return {
       alarm_id: this.alarmId,
       asset_id: this.assetId,
@@ -120,6 +150,7 @@ class LevelAlarm {
 class AlarmEngine {
   constructor(rules) {
     this.byAsset = new Map(); // asset_id -> { lastSeq, alarms: LevelAlarm[] }
+    this.skipped = new Map(); // "asset_id/channel" -> samples skipped by the replay guard
     for (const rule of rules) {
       if (!this.byAsset.has(rule.asset_id)) this.byAsset.set(rule.asset_id, { lastSeq: undefined, alarms: [] });
       for (const severity of SEVERITIES) this.byAsset.get(rule.asset_id).alarms.push(new LevelAlarm(rule, severity));
@@ -132,15 +163,17 @@ class AlarmEngine {
   }
 
   /**
-   * Restore ACTIVE alarms from their latest RAISED events. Returns the events
-   * that match no configured rule (the configuration changed since).
+   * Restore every level alarm from its latest event, RAISED or CLEARED (see
+   * LevelAlarm.restoreFrom). Returns the RAISED events that match no
+   * configured rule (the configuration changed since); a CLEARED event
+   * without a rule restores nothing and needs no warning.
    */
-  restore(activeEvents) {
+  restore(latestEvents) {
     const unmatched = [];
-    for (const ev of activeEvents) {
+    for (const ev of latestEvents) {
       const alarm = this.find(ev.asset_id, ev.channel, ev.severity);
-      if (alarm) alarm.restoreActive(ev.alarm_id);
-      else unmatched.push(ev);
+      if (alarm) alarm.restoreFrom(ev);
+      else if (ev.state === 'RAISED') unmatched.push(ev);
     }
     return unmatched;
   }
@@ -155,8 +188,16 @@ class AlarmEngine {
     const continuous = asset.lastSeq === undefined || sample.seq === asset.lastSeq + 1;
     asset.lastSeq = sample.seq;
     const events = [];
+    const skippedChannels = new Set();
     for (const alarm of asset.alarms) {
+      // A break resets the counters even when the guard skips the sample: an
+      // in-process replay (seq going back) must not resume a run counted
+      // before it.
       if (!continuous) alarm.resetCounters();
+      if (alarm.accountedFor(sample)) {
+        skippedChannels.add(alarm.channel);
+        continue;
+      }
       const value = sample[alarm.channel];
       if (typeof value !== 'number' || !Number.isFinite(value)) {
         alarm.resetCounters();
@@ -165,7 +206,16 @@ class AlarmEngine {
       const event = alarm.evaluate(value, sample);
       if (event) events.push(event);
     }
+    for (const channel of skippedChannels) {
+      const key = `${sample.asset_id}/${channel}`;
+      this.skipped.set(key, (this.skipped.get(key) || 0) + 1);
+    }
     return events;
+  }
+
+  /** Samples skipped by the replay guard so far, per "asset_id/channel". */
+  skippedByReplayGuard() {
+    return Object.fromEntries(this.skipped);
   }
 
   active() {
