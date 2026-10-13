@@ -125,7 +125,10 @@ async function main() {
         for (const client of [consumer, producer, admin]) {
           if (client) await client.disconnect().catch((e) => log.warning('disconnect_failed', { error: e.message }));
         }
-        const summary = { reason, ...counters, active_at_exit: engine.active().length, clocks: kafkaSide.clockReading() };
+        const summary = {
+          reason, ...counters, active_at_exit: engine.active().length,
+          samples_skipped_by_replay_guard: engine.skippedByReplayGuard(), clocks: kafkaSide.clockReading(),
+        };
         if (code === 0) log.info('run_finished', summary);
         else log.error('run_failed', summary);
         return code;
@@ -162,9 +165,9 @@ async function main() {
   }
   try {
     await producer.connect();
-    const { active, stats } = await kafkaSide.readActiveAlarms({ kafka, admin, registry, alarmsTopic, log });
-    const unmatched = engine.restore(active);
-    counters.alarms_restored = active.length - unmatched.length;
+    const { latest, stats } = await kafkaSide.readAlarmState({ kafka, admin, registry, alarmsTopic, log });
+    const unmatched = engine.restore(latest);
+    counters.alarms_restored = engine.active().length;
     log.info('alarms_restored', { ...stats, active: counters.alarms_restored, alarm_ids: engine.active().map((a) => a.alarm_id) });
     for (const ev of unmatched) log.warning('restored_alarm_without_rule', { alarm_id: ev.alarm_id });
   } catch (e) {
