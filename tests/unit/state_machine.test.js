@@ -104,10 +104,19 @@ describe('LevelAlarm', () => {
     expect(engine.active()).toHaveLength(1);
   });
 
-  test('restoreActive marks the alarm active with the given id', () => {
+  test('restoreFrom a RAISED marks the alarm active with its id; a CLEARED leaves it normal', () => {
     const alarm = new LevelAlarm(RULE, 'CRITICAL');
-    alarm.restoreActive('x/1');
-    expect([alarm.state, alarm.alarmId, alarm.threshold]).toEqual(['ACTIVE', 'x/1', 7.1]);
+    alarm.restoreFrom({ alarm_id: 'x/1', state: 'RAISED', ts: 5000 });
+    expect([alarm.state, alarm.alarmId, alarm.threshold, alarm.latestEventTs]).toEqual(['ACTIVE', 'x/1', 7.1, 5000]);
+    alarm.restoreFrom({ alarm_id: 'x/1', state: 'CLEARED', ts: 9000 });
+    expect([alarm.state, alarm.alarmId, alarm.latestEventTs]).toEqual(['NORMAL', null, 9000]);
+  });
+
+  test('restoreFrom ignores an event older than one already applied', () => {
+    const alarm = new LevelAlarm(RULE, 'WARNING');
+    alarm.restoreFrom({ alarm_id: 'x/9', state: 'CLEARED', ts: 9000 });
+    alarm.restoreFrom({ alarm_id: 'x/5', state: 'RAISED', ts: 5000 });
+    expect([alarm.state, alarm.alarmId, alarm.latestEventTs]).toEqual(['NORMAL', null, 9000]);
   });
 });
 
@@ -116,12 +125,14 @@ describe('AlarmEngine', () => {
     expect(new AlarmEngine([RULE]).process({ asset_id: 'pump-09', seq: 0, ts: 1, vibration_rms_mm_s: 99 })).toEqual([]);
   });
 
-  test('restore returns events that match no rule', () => {
+  test('restore returns the RAISED events that match no rule', () => {
     const engine = new AlarmEngine([RULE]);
+    const ev = (id, asset, channel, state = 'RAISED') => ({ alarm_id: id, asset_id: asset, channel, severity: 'WARNING', state, ts: 1 });
     const unmatched = engine.restore([
-      { alarm_id: 'a', asset_id: 'pump-01', channel: 'vibration_rms_mm_s', severity: 'WARNING' },
-      { alarm_id: 'b', asset_id: 'pump-09', channel: 'vibration_rms_mm_s', severity: 'WARNING' },
-      { alarm_id: 'c', asset_id: 'pump-01', channel: 'oil', severity: 'WARNING' },
+      ev('a', 'pump-01', 'vibration_rms_mm_s'),
+      ev('b', 'pump-09', 'vibration_rms_mm_s'),
+      ev('c', 'pump-01', 'oil'),
+      ev('d', 'pump-09', 'oil', 'CLEARED'), // no rule, but nothing to restore: no warning
     ]);
     expect(unmatched.map((e) => e.alarm_id)).toEqual(['b', 'c']);
     expect(engine.active()).toEqual([{ alarm_id: 'a', asset_id: 'pump-01', channel: 'vibration_rms_mm_s', severity: 'WARNING' }]);
@@ -144,12 +155,14 @@ describe('Task 2.2 F1-F3 replay', () => {
   };
   const FAULTED = { ...NORMAL, 'pump-01': 6.5, 'compressor-01': 7.25 }; // imbalance, measured levels
 
-  function run(engine, values, cycles) {
+  // Each phase starts its seq at 0 (the simulator restarted) at a later time:
+  // the clock moves on across a restart, and the replay guard relies on it.
+  function run(engine, values, cycles, startMs = 1790889302000) {
     const events = [];
     for (let seq = 0; seq < cycles; seq += 1) {
       for (const [asset, vibration] of Object.entries(values)) {
         events.push(...engine.process({
-          asset_id: asset, seq, ts: 1790889302000 + seq * 1000, synthetic: true,
+          asset_id: asset, seq, ts: startMs + seq * 1000, synthetic: true,
           bearing_temperature_c: 55, motor_current_a: 20, speed_rpm: 1480, vibration_rms_mm_s: vibration,
         }));
       }
@@ -179,11 +192,106 @@ describe('Task 2.2 F1-F3 replay', () => {
     expect(restarted.restore(latestActive(f1))).toEqual([]);
     expect(restarted.active().map((a) => a.alarm_id).sort()).toEqual(f1.map((e) => e.alarm_id).sort());
 
-    expect(run(restarted, FAULTED, 30)).toEqual([]); // F2: seq starts again at 0, values stay high
+    expect(run(restarted, FAULTED, 30, 1790889402000)).toEqual([]); // F2: seq starts again at 0, values stay high
 
-    const f3 = run(restarted, NORMAL, 30);
+    const f3 = run(restarted, NORMAL, 30, 1790889502000);
     expect(f3.every((e) => e.state === 'CLEARED' && e.source_seq === 4)).toBe(true);
     expect(f3.map((e) => e.alarm_id).sort()).toEqual(f1.map((e) => e.alarm_id).sort());
     expect(restarted.active()).toEqual([]);
+  });
+});
+
+// The replay guard (H3 fix): a sample stamped at or before an alarm's latest
+// event, RAISED or CLEARED, does not count for that alarm.
+describe('replay guard', () => {
+  const T = 1790889302000;
+  const at = (seq, value, ts = T + seq * 1000) => ({ asset_id: 'pump-01', seq, ts, synthetic: true, vibration_rms_mm_s: value });
+  const feedAll = (engine, samples) => samples.flatMap((s) => engine.process(s));
+  const id = (severity, seq) => alarmId('pump-01', 'vibration_rms_mm_s', severity, T + seq * 1000);
+  const restored = (state, severity, raisedSeq, eventSeq = raisedSeq) => ({
+    alarm_id: id(severity, raisedSeq), asset_id: 'pump-01', channel: 'vibration_rms_mm_s', severity, state, ts: T + eventSeq * 1000,
+  });
+  const range = (from, to, value) => Array.from({ length: to - from }, (_, i) => at(from + i, value));
+
+  test('a restored ACTIVE alarm ignores the samples before, and at, its raise (H3)', () => {
+    const engine = new AlarmEngine([RULE]);
+    engine.restore([restored('RAISED', 'WARNING', 9)]);
+    // The replay: normal samples that preceded the raise, then the raising ones.
+    expect(feedAll(engine, [...range(0, 5, 2.0), ...range(5, 10, 5.0)])).toEqual([]);
+    expect(engine.active().map((a) => a.alarm_id)).toEqual([id('WARNING', 9)]);
+    expect(engine.skippedByReplayGuard()).toEqual({ 'pump-01/vibration_rms_mm_s': 10 });
+  });
+
+  test('samples after the raise count: the real clear has the restored id and a later ts', () => {
+    const engine = new AlarmEngine([RULE]);
+    engine.restore([restored('RAISED', 'WARNING', 9)]);
+    const events = feedAll(engine, [...range(0, 10, 2.0), ...range(10, 15, 2.0)]);
+    expect(events.map((e) => [e.state, e.alarm_id, e.source_seq])).toEqual([['CLEARED', id('WARNING', 9), 14]]);
+    expect(engine.skippedByReplayGuard()).toEqual({ 'pump-01/vibration_rms_mm_s': 10 });
+  });
+
+  test('a restored CLEARED alarm is not raised again by the replay of its high samples (phantom alarm)', () => {
+    const engine = new AlarmEngine([RULE]);
+    engine.restore([restored('CLEARED', 'WARNING', 4, 19)]);
+    expect(feedAll(engine, [...range(10, 15, 5.0), ...range(15, 20, 2.0)])).toEqual([]);
+    expect(engine.active()).toEqual([]);
+    // After the CLEARED, samples count again: a new alarm, with a new id.
+    expect(feedAll(engine, range(20, 25, 5.0)).map((e) => [e.state, e.alarm_id])).toEqual([['RAISED', id('WARNING', 24)]]);
+  });
+
+  test('HI and HIHI each have their own guard', () => {
+    const engine = new AlarmEngine([RULE]);
+    // WARNING active since seq 4; CRITICAL raised at seq 4 and cleared at seq 12.
+    engine.restore([restored('RAISED', 'WARNING', 4), restored('CLEARED', 'CRITICAL', 4, 12)]);
+    // Seq 0 to 12 are guarded for CRITICAL; for WARNING, seq 5 on count, and every value keeps it active.
+    expect(feedAll(engine, [...range(0, 8, 7.5), ...range(8, 13, 6.0)])).toEqual([]);
+    expect(feedAll(engine, range(13, 18, 7.5)).map((e) => [e.state, e.severity, e.source_seq])).toEqual([['RAISED', 'CRITICAL', 17]]);
+    expect(engine.active().map((a) => a.severity)).toEqual(['WARNING', 'CRITICAL']);
+  });
+
+  test('a live transition sets the guard: an in-process replay emits nothing', () => {
+    const engine = new AlarmEngine([RULE]);
+    const samples = [...range(0, 5, 2.0), ...range(5, 10, 5.0)];
+    expect(feedAll(engine, samples).map((e) => e.state)).toEqual(['RAISED']);
+    feedAll(engine, range(10, 12, 2.0)); // two of the five clear samples, then the offsets go back
+    expect(feedAll(engine, samples)).toEqual([]);
+    // The seq going back reset the counters: the run before the replay is not resumed.
+    expect(feedAll(engine, range(10, 14, 2.0))).toEqual([]);
+    expect(feedAll(engine, [at(14, 2.0)]).map((e) => e.state)).toEqual(['CLEARED']);
+  });
+
+  test('a sample with the same ts as the latest event is skipped', () => {
+    const engine = new AlarmEngine([RULE]);
+    engine.restore([restored('RAISED', 'WARNING', 9)]);
+    expect(feedAll(engine, [at(10, 2.0, T + 9000)])).toEqual([]);
+    expect(engine.skippedByReplayGuard()).toEqual({ 'pump-01/vibration_rms_mm_s': 1 });
+  });
+
+  test('a ts going back before the latest event is ignored and counted, never cleared or raised (clock risk)', () => {
+    const engine = new AlarmEngine([RULE]);
+    expect(feedAll(engine, range(0, 5, 5.0)).map((e) => e.state)).toEqual(['RAISED']); // latest event at seq 4
+    // The producer's clock goes back 60 s; seq carries on. These normal values would otherwise clear the alarm.
+    const back = Array.from({ length: 10 }, (_, i) => at(5 + i, 2.0, T - 60000 + i * 1000));
+    expect(feedAll(engine, back)).toEqual([]);
+    expect(engine.active()).toHaveLength(1);
+    expect(engine.skippedByReplayGuard()).toEqual({ 'pump-01/vibration_rms_mm_s': 10 });
+    // Once the time passes the latest event, samples count again.
+    const later = Array.from({ length: 5 }, (_, i) => at(15 + i, 2.0, T + 5000 + i * 1000));
+    expect(feedAll(engine, later).map((e) => e.state)).toEqual(['CLEARED']);
+  });
+
+  test('a ts going back never raises a normal alarm either', () => {
+    const engine = new AlarmEngine([RULE]);
+    engine.restore([restored('CLEARED', 'WARNING', 4, 9)]);
+    const back = Array.from({ length: 10 }, (_, i) => at(10 + i, 5.0, T - 60000 + i * 1000));
+    expect(feedAll(engine, back)).toEqual([]);
+    expect(engine.active()).toEqual([]);
+  });
+
+  test('a channel skipped by both severities counts once per sample', () => {
+    const engine = new AlarmEngine([RULE]);
+    engine.restore([restored('RAISED', 'WARNING', 9), restored('RAISED', 'CRITICAL', 9)]);
+    feedAll(engine, range(0, 3, 8.0));
+    expect(engine.skippedByReplayGuard()).toEqual({ 'pump-01/vibration_rms_mm_s': 3 });
   });
 });
