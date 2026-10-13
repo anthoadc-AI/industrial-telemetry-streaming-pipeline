@@ -24,6 +24,8 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 1.5 | Dos modos de fallo: `bearing_overheating` (rampa, temperatura) e `imbalance` (escalón, vibración) | `config/telemetry.yaml:95-113` | cfg |
 | 1.6 | Los umbrales son ilustrativos y elegidos para los datos sintéticos | `config/alarms.yaml:3-6` | cfg |
 | 1.7 | `synthetic` en cada registro de telemetría y de alarma; `injected_fault` | `schemas/telemetry_v1.avsc`, `schemas/alarm_v1.avsc`; `edge/simulator/__main__.py:239-241`; `state_machine.js:114` (`synthetic` en el evento) | cód |
+| 1.8 | Punto de partida: el trabajo del Módulo 24 de un curso de MIT xPRO, en el tag `v0-coursework`; contenido de sus tres carpetas | `git show v0-coursework` (mensaje del tag y del commit `aac0d8c`); `git ls-tree -r --name-only v0-coursework`; `Project_24_MQTT/paho-mqtt/TBpublish.py:23` en el tag (`random.randint`) | git |
+| 1.9 | `bench/` es el arnés del benchmark, no parte del pipeline; resultados y reporte | `bench/__init__.py:1`; `bench/results/README.md:1-3`; `docs/internal/phase3_task3.3_closure_report.en.md:1-5` | cód, int |
 
 ## 2-4. Componentes y flujo
 
@@ -109,7 +111,7 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 
 | # | Fila del documento | Evidencia | Tipo |
 |---|---|---|---|
-| 8.1 | Bridge caído o desconectado | `phase3_backlog.md:14` (observado el 2026-10-03); `__main__.py:342` (`mqtt_disconnected`) | int, cód |
+| 8.1 | Bridge caído o desconectado: observación manual, sin test automático | `phase3_backlog.md:14` (observado el 2026-10-03); `__main__.py:342` (`mqtt_disconnected`) | int, cód |
 | 8.2 | Bridge más lento que su entrada | `test_a_paused_bridge_loses_nothing`, `test_an_overflow_is_logged_with_its_count` | test |
 | 8.3 | Payload inválido | `test_dead_letters_real` | test |
 | 8.4 | Fallo al enviar a la DLQ (bridge) | `__main__.py:18-25`; `test_bridge_dead_letter_send_failure_real` | cód, test |

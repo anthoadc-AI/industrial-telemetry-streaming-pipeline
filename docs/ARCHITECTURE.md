@@ -6,7 +6,9 @@
 
 This document describes an industrial telemetry pipeline that runs on one host. A simulator publishes condition-monitoring telemetry for five machines over MQTT. A bridge validates it and writes it to Kafka as Avro. An alarm consumer evaluates level alarms with persistence and hysteresis. A sink forwards telemetry and alarm events to ThingsBoard for operators.
 
-The document covers what each part does, how data moves, what is guaranteed at each hop, what is not, and why. Every statement about behaviour points to code, configuration or a test in this repository. The internal traceability table lists the evidence for each one. This document contains no performance figures: values below are configuration values, read from `config/` and `docker-compose.yml`.
+The document covers what each part does, how data moves, what is guaranteed at each hop, what is not, and why. Every statement about behaviour points to code, configuration or a test in this repository. The traceability table `docs/internal/phase3_task3.4_traceability.md` lists the evidence for each one. This document contains no performance figures: values below are configuration values, read from `config/` and `docker-compose.yml`.
+
+**About the internal documents.** The project was built in phases (Phase 0 to Phase 3). The reports, briefings and backlog of those phases are under `docs/internal/`. Most Phase 3 documents there are in Spanish; the Phase 0 to Phase 2 documents and the backlog `docs/internal/phase3_backlog.md` are in English. Where this document cites them as evidence, it gives the file path.
 
 ## Contents
 
@@ -30,7 +32,8 @@ The document covers what each part does, how data moves, what is guaranteed at e
 **What the system is.**
 - A local pipeline on one host, started with Docker Compose.
 - One Kafka broker with replication factor 1, one Mosquitto broker and one ThingsBoard instance.
-- It began as course work and was rebuilt for engineering quality.
+- It started from the coursework of Module 24 of an MIT xPRO course, preserved at the tag `v0-coursework`. That tag holds the three course folders as found: a Mosquitto broker stack; a ThingsBoard stack with a paho-mqtt publisher of random temperature and humidity values (its rule chains, which forwarded to Firebase, lived in the ThingsBoard database and are not in the tag); and a Confluent Platform 6.1.1 stack with a Python producer of vehicle coordinates and a Node.js kafkajs consumer. The pipeline described here was rebuilt from that starting point; section 12 says what was kept from it.
+- `bench/` is the benchmark harness used to measure the pipeline. It is not part of the pipeline. Its results are in `bench/results/` and its report is `docs/internal/phase3_task3.3_closure_report.en.md`.
 
 **What it is not.**
 - Not a production deployment. There is no authentication on MQTT (`allow_anonymous true` in `broker/mosquitto/mosquitto.conf`), no TLS, and Kafka listeners are PLAINTEXT (`docker-compose.yml`).
@@ -377,7 +380,7 @@ The Evidence column gives the test that shows the behaviour. "Code" means the be
 
 | Condition | Effect | How it is detected | Evidence |
 |---|---|---|---|
-| Bridge not running or disconnected | Messages published meanwhile are acknowledged to the simulator and lost | Not by the pipeline: no Kafka record, no drop count; the bridge logs `mqtt_disconnected` | Code; owner observation recorded in the internal backlog |
+| Bridge not running or disconnected | Messages published meanwhile are acknowledged to the simulator and lost | Not by the pipeline: no Kafka record, no drop count; the bridge logs `mqtt_disconnected` | Manual observation on 2026-10-03, no automated test; recorded in `docs/internal/phase3_backlog.md:14` |
 | Bridge slower than its input | Mosquitto queues up to 60,000 messages or 25 MiB for it, then drops new ones | `mqtt_messages_dropped` at ERROR, up to 10 s later | `test_a_paused_bridge_loses_nothing`, `test_an_overflow_is_logged_with_its_count` |
 | Invalid payload | Dead-lettered intact with a reason; valid traffic continues | `message_dead_lettered`; a `telemetry.dlq` record | `test_dead_letters_real` |
 | Dead-letter send fails (bridge) | Payload logged base64-encoded at ERROR, bridge carries on, exit status 1 at the end | ERROR line; exit status | `test_bridge_dead_letter_send_failure_real` |
@@ -451,7 +454,7 @@ The Evidence column gives the test that shows the behaviour. "Code" means the be
 
 ### Storage and stopping
 
-- **Kafka and ZooKeeper keep their data on tmpfs.** Every container start begins empty, and `make up` recreates the topics. The reason (`docker-compose.yml`): Phase 0 reproduced a broker that refused to start on a stale ZooKeeper znode left by an unclean stop.
+- **Kafka and ZooKeeper keep their data on tmpfs.** Every container start begins empty, and `make up` recreates the topics. The reason (`docker-compose.yml`; `docs/internal/phase0_diagnostic_report.md:218`): Phase 0 reproduced a broker that refused to start on a stale ZooKeeper znode left by an unclean stop.
 - **ThingsBoard keeps its data in named volumes.**
 - **Grace periods.** Every service sets `stop_grace_period`; the pipeline containers use 30 s. The reason: Docker Desktop otherwise creates containers with a 1 s stop timeout.
 - **ThingsBoard ignores SIGTERM.** Its start script runs as PID 1 without a handler, so every stop ends with SIGKILL after its 5 s grace period, and Postgres runs crash recovery on the next start. This is listed in section 13.
@@ -585,17 +588,17 @@ These checks are in `tests/integration/conftest.py`.
 
 | Decision | Reason | Alternatives not taken | Evidence |
 |---|---|---|---|
-| Confluent Platform 6.1.1 with ZooKeeper and `cp-server` | Inherited from the course stack, not re-evaluated. | KRaft and a current Kafka version were not evaluated. | Course compose tags recorded in Phase 0; Phase 1 pins |
-| Alarm consumer in Node.js | Owner decision in Phase 2: two runtimes in the pipeline rather than Python only. | A Python consumer, the earlier plan | Phase 2 briefing and owner note in the internal backlog |
-| kafkajs as the Node.js Kafka client | `node-rdkafka` does not work with Node.js 24. The risk that kafkajs has had no release since 2023-02-27 was accepted. | `@confluentinc/kafka-javascript`, recorded as the alternative if kafkajs becomes a problem | Phase 0 report; Phase 2 backlog |
-| ThingsBoard 4.2.1.1 | The version the course installation was running; Phase 0 pinned it as found, since the course compose left it untagged. | — | Phase 0 report |
-| One alarm engine, outside ThingsBoard | A constraint decided in Phase 2: thresholds, persistence and hysteresis are evaluated only in the alarm consumer; ThingsBoard displays alarm state. | The course rule chain `CreateAndClearAlarms`, with its own temperature threshold, retired | Phase 3 briefing; `scripts/thingsboard/import_rule_chains.py` |
+| Confluent Platform 6.1.1 with ZooKeeper and `cp-server` | Inherited from the course stack, not re-evaluated. | KRaft and a current Kafka version were not evaluated. | `docs/internal/phase0_diagnostic_report.md:152` (course compose tags); `docs/internal/claude_code_briefings/phase1_briefing_solid_base.md:62` (pins) |
+| Alarm consumer in Node.js | Project decision in Phase 2: two runtimes in the pipeline rather than Python only. | A Python consumer, the earlier plan | `docs/internal/claude_code_briefings/phase2_briefing_engineering_quality.md:29`; `docs/internal/phase2_backlog.md:14` |
+| kafkajs as the Node.js Kafka client | `node-rdkafka` does not work with Node.js 24. The risk that kafkajs has had no release since 2023-02-27 was accepted. | `@confluentinc/kafka-javascript`, recorded as the alternative if kafkajs becomes a problem | `docs/internal/phase0_diagnostic_report.md:473`; `docs/internal/phase2_backlog.md:35` |
+| ThingsBoard 4.2.1.1 | The version the course installation was running; Phase 0 pinned it as found, since the course compose left it untagged. | — | `docs/internal/phase0_diagnostic_report.md:320` |
+| One alarm engine, outside ThingsBoard | A constraint decided in Phase 2: thresholds, persistence and hysteresis are evaluated only in the alarm consumer; ThingsBoard displays alarm state. | The course rule chain `CreateAndClearAlarms`, with its own temperature threshold, retired | `docs/internal/claude_code_briefings/phase3_briefing_quantified_evidence.md:76`; `scripts/thingsboard/import_rule_chains.py` |
 | At-least-once with deterministic `alarm_id`, not Kafka transactions | A transaction cannot cover the in-memory state, which is rebuilt from `telemetry.alarms` anyway; duplicates are deduplicated by `alarm_id`. | Kafka transactions | `processing/alarm_consumer/consumer.js` |
 | `telemetry.alarms` compacted and keyed by `alarm_id`, partitioned by asset | Compaction keeps the latest event per alarm for the restore; per-asset order for AlarmMapping. | Default partitioner (by the whole `alarm_id`) | `processing/alarm_consumer/consumer.js`; `test_alarms_of_an_asset_share_one_partition` |
 | Avro with Schema Registry, `BACKWARD` compatibility | Producers and consumers in two languages share one contract; incompatible registrations are rejected. | — | `schemas/README.md`, `broker/kafka/provision.py` |
 | Dead-letter send failure: the bridge carries on, the consumer stops | The source decides: an MQTT message cannot be fetched again, a Kafka offset can be re-read. | The same policy in both | `bridge/mqtt_to_kafka/__main__.py`, `processing/alarm_consumer/consumer.js` |
 | No range check in validation | `config/telemetry.yaml` defines units but no physical limits: there is no source of truth for a range. | — | `bridge/mqtt_to_kafka/validation.py` |
-| Kafka and ZooKeeper on tmpfs | Phase 0 reproduced a broker that would not start on stale ZooKeeper state; Kafka holds nothing irreplaceable here. | Persistent Kafka storage (a volume): considered, not decided (section 13) | `docker-compose.yml` |
+| Kafka and ZooKeeper on tmpfs | Phase 0 reproduced a broker that would not start on stale ZooKeeper state; Kafka holds nothing irreplaceable here. | Persistent Kafka storage (a volume): considered, not decided (section 13) | `docker-compose.yml`; `docs/internal/phase0_diagnostic_report.md:218` |
 | Sink rate limit per asset, coupled with ThingsBoard's SQL batch delays | ThingsBoard processes an asset's messages one at a time; the limit keeps an asset's batches small. | Sending at full speed | `config/thingsboard.yaml`, `docker-compose.yml` |
 | PipelineSequential queue for pipeline devices | One message at a time per device, a 60 s batch and 20 retries, so ThingsBoard does not drop alarm events at the first timeout. | ThingsBoard's SequentialByOriginator queue (2 s per batch, 3 retries), which dropped alarm events | `scripts/thingsboard/import_rule_chains.py` |
 
