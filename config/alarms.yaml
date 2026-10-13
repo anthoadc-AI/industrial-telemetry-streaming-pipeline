@@ -1,9 +1,17 @@
 # Alarm thresholds for the condition-monitoring pipeline.
 #
-# The values are illustrative defaults chosen for the synthetic data in
-# telemetry.yaml: normal operation stays below every warning level, and each
-# injected fault mode crosses at least one. They are not derived from any
-# real machine or published standard.
+# The values are chosen for the synthetic data in telemetry.yaml: normal
+# operation stays below every warning level, and each injected fault mode
+# crosses at least one.
+#
+# The vibration thresholds, 4.5 and 7.1 mm/s RMS, coincide with the B/C and
+# C/D zone boundaries that ISO 20816-3 (formerly ISO 10816-3) gives for
+# Group 2 machines (15 kW to 300 kW) on flexible supports. No source was
+# recorded when they were chosen, and they were not derived from an
+# assessment of these synthetic assets, whose power rating and support type
+# the repository does not define; on rigid supports the same standard gives
+# 2.8 and 4.5 mm/s. The temperature and current thresholds are illustrative
+# values.
 #
 # Semantics, for direction "high" (the only direction used here):
 #   - An alarm is raised at a severity when the value is at or above that
