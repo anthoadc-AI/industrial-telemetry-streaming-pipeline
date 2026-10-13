@@ -17,8 +17,10 @@
 #   pipeline-tb  the ThingsBoard sink in a container, always with full.
 #             `make up-pipeline`.
 #   simulator the edge simulator, for one-off `docker compose run` only.
-#   firebase  reserved for the optional Firebase sink, which is disabled by
-#             default and has no service yet.
+# The optional Firebase sink is not a compose service: it is a REST node in
+# the ThingsBoard root rule chain, kept or pruned at import time by
+# FIREBASE_ENABLED (scripts/thingsboard/import_rule_chains.py). No profile
+# enables it.
 # No core service depends on thingsboard, so the core stack starts alone.
 #
 # Every path an image declares as a VOLUME is mounted explicitly: named

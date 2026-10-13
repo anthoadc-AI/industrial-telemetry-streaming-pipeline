@@ -34,7 +34,7 @@ kafka:
       cleanup.policy: compact
   telemetry_dlq:
     name: telemetry.dlq
-    description: Messages the bridge or the alarm consumer could not process, intact, with the reason; keyed by asset_id when known.
+    description: Messages the bridge, the alarm consumer or the ThingsBoard sink could not process, intact, with the reason; keyed by asset_id when known (bridge, alarm consumer) or by the source record's alarm_id key (ThingsBoard sink).
     partitions: 1
     replication_factor: 1
     value_schema: schemas/dlq_v1.avsc
