@@ -53,38 +53,38 @@ The document covers what each part does, how data moves, what is guaranteed at e
 ## 2. System at a glance
 
 ```mermaid
-flowchart LR
-  SIM["Edge simulator<br/>edge/simulator<br/>(synthetic data)"]
-  MQ["Mosquitto 2.1.2<br/>plant/+/telemetry"]
-  BR["MQTT-to-Kafka bridge<br/>bridge/mqtt_to_kafka"]
-  subgraph K["Kafka (cp-server 6.1.1) + Schema Registry"]
-    RAW[("telemetry.raw<br/>key asset_id, 3 partitions")]
-    ALM[("telemetry.alarms<br/>key alarm_id, partitioned by asset_id<br/>compacted")]
-    DLQ[("telemetry.dlq<br/>1 partition, 7 days")]
-  end
-  AC["Alarm consumer (Node.js)<br/>processing/alarm_consumer"]
-  SK["ThingsBoard sink<br/>processing/thingsboard_sink"]
-  TB["ThingsBoard 4.2.1.1<br/>AlarmMapping, dashboard"]
-  FB["Firebase Realtime Database<br/>(optional, off by default)"]
+flowchart TB
+  SIM["Edge simulator<br/>(synthetic data)"]
+  MQ["Mosquitto 2.1.2"]
+  BR["MQTT-to-Kafka bridge"]
+  RAW[("Kafka: telemetry.raw")]
+  AC["Alarm consumer<br/>(Node.js)"]
+  ALM[("Kafka: telemetry.alarms<br/>compacted")]
+  SK["ThingsBoard sink"]
+  DLQ[("Kafka: telemetry.dlq")]
+  TB["ThingsBoard 4.2.1.1"]
+  FB["Firebase<br/>(optional, off)"]
 
-  SIM -->|"MQTT QoS 1, JSON"| MQ
-  MQ -->|"QoS 1, clean session"| BR
-  BR -->|"Avro, acks=all"| RAW
-  BR -->|"invalid message"| DLQ
+  SIM -->|"MQTT QoS 1"| MQ
+  MQ -->|"QoS 1"| BR
+  BR -->|"Avro"| RAW
+  RAW --> SK
   RAW --> AC
   AC -->|"RAISED / CLEARED"| ALM
-  AC -->|"undecodable"| DLQ
-  ALM -.->|"state restore at start-up"| AC
-  RAW --> SK
+  ALM -.->|"restore"| AC
   ALM --> SK
-  SK -->|"undecodable alarm event"| DLQ
-  SK -->|"gateway MQTT, QoS 1<br/>max 10 msg/s per asset"| TB
-  TB -.->|"REST PUT, FIREBASE_ENABLED=true"| FB
+  SK -->|"MQTT, 10 msg/s per asset"| TB
+  TB -.->|"REST, if enabled"| FB
+  BR -->|"invalid"| DLQ
+  AC -->|"undecodable"| DLQ
+  SK -->|"undecodable"| DLQ
+  linkStyle 10,11,12 stroke:#c0392b,color:#c0392b
 ```
 
+- **Reading the diagram.** The three cylinders are topics on one Kafka broker (`cp-server` 6.1.1), with Avro schemas in Schema Registry; keys, partitions and retention are in section 5. Red edges carry dead letters. Dotted edges are the state restore at start-up and the optional Firebase leg (`FIREBASE_ENABLED=true`, section 14). Each component's code path is in section 3.
 - **Simulator to Mosquitto.** One JSON message per asset and sample cycle, on `plant/<asset_id>/telemetry`, QoS 1.
 - **Mosquitto to bridge.** The bridge subscribes to `plant/+/telemetry` with a clean session.
-- **Bridge to Kafka.** Valid messages become Avro records on `telemetry.raw`, keyed by `asset_id`. Invalid ones go to `telemetry.dlq` intact, with a reason.
+- **Bridge to Kafka.** Valid messages become Avro records on `telemetry.raw`, keyed by `asset_id`, produced with `acks=all`. Invalid ones go to `telemetry.dlq` intact, with a reason.
 - **Kafka to alarm consumer.** The consumer reads `telemetry.raw`, runs the alarm state machines, and writes RAISED and CLEARED events to `telemetry.alarms`. At start-up it rebuilds its active alarms from that topic.
 - **Kafka to ThingsBoard.** The sink reads both topics in its own consumer group and publishes to ThingsBoard's gateway MQTT API. There, the AlarmMapping rule chain turns alarm events into ThingsBoard alarms.
 
@@ -239,14 +239,18 @@ Each one has its own state and its own `alarm_id`. A value above both raises WAR
 stateDiagram-v2
   direction LR
   [*] --> NORMAL
-  NORMAL --> ACTIVE: value at or above threshold for persistence_samples consecutive samples, emit RAISED
-  ACTIVE --> NORMAL: value below threshold minus hysteresis for persistence_samples consecutive samples, emit CLEARED
+  NORMAL --> ACTIVE: high, emit RAISED
+  ACTIVE --> NORMAL: low, emit CLEARED
   note right of ACTIVE
-    A gap in seq, seq going back, or a null or non-finite value
-    resets both counters and never changes the state.
+    Gap or step back in seq, or a null or non-finite value:
+    both counters reset, state unchanged.
   end note
 ```
 
+- **Transitions.**
+  - *High:* the value is at or above the threshold for `persistence_samples` consecutive samples. The alarm becomes ACTIVE and RAISED is emitted.
+  - *Low:* the value is below the threshold minus the hysteresis for `persistence_samples` consecutive samples. The alarm returns to NORMAL and CLEARED is emitted.
+  - A gap in `seq`, `seq` going back, or a null or non-finite value resets both counters and never changes the state.
 - **Persistence** is an on-delay and off-delay counted in samples. **Hysteresis** is a deadband in the channel's unit.
 - **No time-based behaviour.** There is no debounce in time and no periodic clean-up: an alarm stays ACTIVE until its clear condition holds.
 - **`alarm_id`** is `<asset_id>/<channel>/<severity>/<ts of the RAISED sample, epoch ms>`. It is deterministic: processing the same samples again yields the same id.
