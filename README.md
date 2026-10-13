@@ -56,8 +56,8 @@ flowchart TB
 ## Measured figures
 
 **Conditions.** One laptop: Docker Desktop on WSL 2 with 8 vCPUs, the services pinned to fixed vCPUs
-(`config/benchmark.yaml`), every component on one host and one Docker network. Kafka is a single broker with replication factor 1, writing to tmpfs. Synthetic
-messages of about 218 B. Each run measures a 300 s window; the five runs of each row are summarised as their median
+(`config/benchmark.yaml`), every component on one host and one Docker network. Kafka is a single broker with
+replication factor 1, writing to tmpfs. Synthetic messages of about 218 B. Each run measures a 300 s window; the five runs of each row are summarised as their median
 and, in brackets, the range across runs, in whole milliseconds. These figures say nothing about separate machines,
 real networks, a replicated disk-backed Kafka, or runs of hours.
 
