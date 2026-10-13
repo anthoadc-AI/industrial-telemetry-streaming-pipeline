@@ -259,40 +259,42 @@ stateDiagram-v2
 
 ### State restore at start-up
 
-**What is rebuilt.** Before consuming, the alarm consumer reads `telemetry.alarms` from the beginning up to the end offsets taken at start, with a limit of 60 s (`readActiveAlarms`, `processing/alarm_consumer/consumer.js`):
-- it keeps the latest event per key (a tombstone deletes the key);
-- it marks as ACTIVE every alarm whose latest event is RAISED (`restoreActive`, `state_machine.js`);
+**What is rebuilt.** Before consuming, the alarm consumer reads `telemetry.alarms` from the beginning up to the end offsets taken at start, with a limit of 60 s (`readAlarmState`, `processing/alarm_consumer/consumer.js`):
+- it keeps the latest event per key (a tombstone deletes the key), then the latest event per alarm type (asset, channel, severity) by `ts`, RAISED or CLEARED;
+- it restores each level alarm from that event (`restoreFrom`, `state_machine.js`): ACTIVE with its `alarm_id` after a RAISED, NORMAL after a CLEARED;
+- either way, the event's `ts` becomes the alarm's replay guard (below);
 - it logs `alarms_restored`;
-- a restored alarm that no configured rule matches any more is logged as `restored_alarm_without_rule`.
+- a restored RAISED event that no configured rule matches any more is logged as `restored_alarm_without_rule`.
+
+**Replay guard.** Each level alarm keeps the `ts` of its latest event, RAISED or CLEARED, whether restored or emitted while running. A sample stamped at or before that `ts` is already accounted for by the event, so it does not count for that alarm: it changes neither the state nor the counters. The consumer counts such samples per asset and channel and reports them as `samples_skipped_by_replay_guard` on `run_finished`.
+- **Why.** After a stop between an alarm send and its offset commit, the samples that caused the event are processed again (section 7). Without the guard they were evaluated a second time against the restored state, which produced two defects (below).
+- **Why `ts` and not `seq`.** The simulator starts `seq` at 0 again when it restarts (`edge/simulator/__main__.py`), so a guard by `seq` would ignore every new sample after a simulator restart.
+- **Cost.** If a producer's clock goes back, an alarm ignores that asset's samples until the time passes its latest event: it neither raises nor clears meanwhile (section 13). `tests/unit/state_machine.test.js` pins this.
 
 **What is not rebuilt.**
 - The persistence counters and the last `seq` of each asset are not rebuilt. Consumption resumes at the group's committed offset on `telemetry.raw`, with the counters at zero.
 - A run of samples that began before that offset is counted again from there. A raise or clear in progress at the stop can therefore come up to `persistence_samples − 1` samples later than it would have without the restart. This is read from the code; no test measures it.
 
-### Known defect: a spurious CLEARED after a restore and a replay
+### Fixed: two defects of the replay after a restore
 
-**When it happens.** The consumer's offsets are committed after the handlers of a fetched batch return. If the consumer stops between sending a RAISED and that commit, two things are left behind:
-- the RAISED is in `telemetry.alarms`;
-- the committed offset is before the samples that raised it.
+Both were found during the architecture review and fixed by the replay guard. The consumer's offsets are committed after the handlers of a fetched batch return, so a stop between an alarm send and that commit (a crash, a kill, or the documented stop on a failed send later in the batch) leaves the event in `telemetry.alarms` and the committed offset before the samples that caused it. On restart those samples were processed again.
 
-The stop can be a crash, a kill, or the documented stop on a failed send later in the batch. On restart the alarm is restored as ACTIVE, and the samples are processed again. If that replay includes at least `persistence_samples` consecutive samples of the same asset below the clear level before the raising samples, the following happens.
+**Spurious CLEARED (found in the review of this document).** The alarm was restored ACTIVE. If the replay included at least `persistence_samples` samples below the clear level before the raising ones:
+- the consumer wrote a CLEARED for the restored `alarm_id`, stamped before the raise, then the same RAISED again;
+- ThingsBoard applied the CLEARED, dropped the repeated RAISED and later the real CLEARED, so it showed the alarm cleared while the condition still held.
 
-**What the consumer writes, in order:**
-1. A CLEARED for the restored `alarm_id`, stamped with a sample that precedes the raise.
-2. The same RAISED again, when the raising samples are replayed.
+**Phantom alarm (found while fixing the first).** The alarm had been raised in a committed batch and cleared in the uncommitted one, so it was restored NORMAL. If the replay included at least `persistence_samples` high samples before the clearing ones:
+- the consumer raised the alarm again under a new `alarm_id`, then cleared it;
+- ThingsBoard showed an extra alarm, raised and cleared at once, and `telemetry.alarms` kept an extra key.
 
-**`telemetry.alarms`** then holds RAISED, CLEARED, RAISED for that key. The latest record is RAISED, so a later restore is correct. A reader that walks the topic sees a clear that did not happen.
+An earlier version of this section said that a replayed alarm that was already cleared had no visible effect. That holds only when its raise is also replayed; the phantom alarm is the case it missed.
 
-**ThingsBoard** shows the alarm cleared while the condition still holds:
-- AlarmMapping applies the CLEARED, because it carries the `raised_ts` of the alarm it holds.
-- It drops the repeated RAISED as a replay.
-- It later drops the real CLEARED as well.
+**Evidence.** `tests/integration/test_restore_replay.py` builds both states by moving the group's committed offset back, not by timing a crash. Each test fails against the code before the fix and passes with it:
+- `test_replay_before_the_raise_does_not_clear_the_restored_alarm` (core stack): the replay emits nothing, and `telemetry.alarms` holds one RAISED until the real clear;
+- `test_replay_of_a_clear_does_not_raise_a_phantom_alarm` (core stack): the replay emits nothing and adds no key;
+- `test_after_the_replay_thingsboard_keeps_the_alarm_active_until_the_real_clear` (with ThingsBoard).
 
-**Evidence.** `tests/integration/test_restore_replay.py` reproduces the defect by moving the group's committed offset back, not by timing a crash, and pins the current behaviour:
-- `test_replay_before_the_raise_emits_a_spurious_clear`, on the core stack;
-- `test_after_the_replay_thingsboard_shows_the_alarm_cleared_while_it_is_active`, with ThingsBoard.
-
-How often the condition arises in practice has not been measured. The defect is open (section 13). An alarm that was already cleared before the stop is not affected: its replay repeats RAISED and CLEARED with the same `alarm_id`, and AlarmMapping drops both as replays.
+How often the condition arose in practice was not measured.
 
 ### ThingsBoard maps, it does not decide
 
@@ -354,7 +356,7 @@ kafkajs commits a message's offset only after its handler has returned. An offse
 **Failures and duplicates.**
 - **A send that fails after the producer's retries** throws. Consumer retries are disabled, so the consumer stops without committing and exits 1. On restart the sample is processed again.
 - **A transient Schema Registry failure** is never dead-lettered. It stops the consumer the same way.
-- **A crash after a send and before the commit** can repeat events. They carry the same deterministic `alarm_id`, and on the compacted topic the same key. One exception produces a different event, not a duplicate: the spurious CLEARED in section 6.
+- **A crash after a send and before the commit** makes the consumer process those samples again after the restart. The replay guard skips, for each alarm, the samples at or before its latest event, so the replay does not repeat or contradict the events already written (section 6). Any duplicate that reaches a reader carries the same deterministic `alarm_id`, and on the compacted topic the same key.
 - **Why not Kafka transactions.** A transaction would make the events and the input offset atomic, but it cannot cover the consumer's in-memory state, which is rebuilt from `telemetry.alarms` anyway (module comment in `consumer.js`).
 
 ### Kafka to ThingsBoard
@@ -376,7 +378,7 @@ kafkajs commits a message's offset only after its handler has returned. An offse
 | Simulator → Mosquitto | acknowledged (QoS 1) | the acknowledgement does not imply delivery onward |
 | Mosquitto → bridge | at most once | bridge not connected; queue limit reached (logged) |
 | Bridge → `telemetry.raw` | once, from receipt by a running bridge | bridge crash; delivery failure (logged) |
-| `telemetry.raw` → `telemetry.alarms` | at least once, events keyed by deterministic `alarm_id` | spurious CLEARED after a restore and a replay (section 6) |
+| `telemetry.raw` → `telemetry.alarms` | at least once, events keyed by deterministic `alarm_id` | a sample stamped at or before an alarm's latest event does not count for it (replay guard, section 6) |
 | Kafka → ThingsBoard transport | at least once | — |
 | ThingsBoard transport → rule engine | in memory | ThingsBoard restart before processing |
 
@@ -397,7 +399,8 @@ The Evidence column gives the test that shows the behaviour. "Code" means the be
 | Schema Registry unavailable (sink) | Retried with backoff; consumption waits | `forward_retry`; sink lag | Code |
 | Schema Registry unavailable after start-up (bridge) | Not verified | — | No test |
 | Alarm consumer stopped | `telemetry.raw` accumulates; on restart, state restore and resume from the committed offset | Lag of its consumer group | `test_restore_after_real_compaction` |
-| Alarm consumer stopped between an alarm send and its offset commit | Repeated events with the same `alarm_id`; or a spurious CLEARED (section 6) | Not detected | `test_replay_before_the_raise_emits_a_spurious_clear` |
+| Alarm consumer stopped between an alarm send and its offset commit | The samples are processed again; for each alarm, those at or before its latest event are skipped, so no event is repeated, contradicted or invented (section 6) | `samples_skipped_by_replay_guard` on `run_finished` | `test_replay_before_the_raise_does_not_clear_the_restored_alarm`, `test_replay_of_a_clear_does_not_raise_a_phantom_alarm` |
+| A producer's clock goes back | That asset's samples stamped before an alarm's latest event are ignored for that alarm until the time passes it: no raise, no clear | `samples_skipped_by_replay_guard` on `run_finished` | `tests/unit/state_machine.test.js` (replay guard) |
 | ThingsBoard or the sink down | Backlog in Kafka; the sink retries; after recovery it drains at the per-asset limit, and new alarms wait behind the backlog | Sink lag; `forward_retry`, `thingsboard_disconnected` | `test_a_backlog_of_one_asset_reaches_thingsboard_without_a_drop` |
 | ThingsBoard restarted | Messages accepted but not yet processed are lost | Not detected by the sink | Code (`TB_QUEUE_TYPE: in-memory`) |
 | AlarmMapping cannot apply a message | Failure branch, recorded; the asset's next messages continue | `alarm_mapping_failed` on the pipeline gateway; dashboard counter | `test_a_mapping_failure_is_recorded_and_does_not_hold_back_the_asset` |
@@ -506,7 +509,7 @@ Key events:
 | Component | Events |
 |---|---|
 | Bridge | `schema_registered`, `mqtt_subscribed`, `mqtt_disconnected`, `message_delivered`, `message_dead_lettered`, `message_delivery_failed`, `mqtt_messages_dropped`, `mosquitto_sys_silent`, `delivery_reports_failed`, `run_finished`, `run_finished_incomplete` |
-| Alarm consumer | `alarms_restored`, `restored_alarm_without_rule`, `state_restore_failed`, `alarm_raised`, `alarm_cleared`, `message_dead_lettered`, `schema_registry_unavailable`, `run_finished` |
+| Alarm consumer | `alarms_restored`, `restored_alarm_without_rule`, `state_restore_failed`, `alarm_raised`, `alarm_cleared`, `message_dead_lettered`, `schema_registry_unavailable`, `run_finished` (with `samples_skipped_by_replay_guard` per asset and channel) |
 | ThingsBoard sink | `run_started`, `thingsboard_connected`, `thingsboard_disconnected`, `forward_retry`, `message_undecodable`, `message_dead_lettered`, `tombstone_skipped` (DEBUG), `run_finished` |
 | Import script | `firebase_leg_pruned`, `alarm_reconciled`, `alarm_last_reconciled`, `alarm_reconciliation_done` |
 
@@ -574,7 +577,7 @@ Integration tests that back the guarantees above (`tests/integration/`):
 | A queue overflow is logged with its count | `test_an_overflow_is_logged_with_its_count` (full profile) |
 | Clean stop flushes (SIGTERM) | `test_sigterm_flushes_simulator_and_bridge` (Linux only) |
 | State restore from a really compacted topic | `test_restore_after_real_compaction` |
-| Spurious CLEARED after a restore and a replay (known defect) | `test_replay_before_the_raise_emits_a_spurious_clear`; `test_after_the_replay_thingsboard_shows_the_alarm_cleared_while_it_is_active` (full profile) |
+| A replay after a restore neither clears an active alarm nor raises a phantom one (fixed defects) | `test_replay_before_the_raise_does_not_clear_the_restored_alarm`; `test_replay_of_a_clear_does_not_raise_a_phantom_alarm`; `test_after_the_replay_thingsboard_keeps_the_alarm_active_until_the_real_clear` (full profile) |
 | An asset's alarms share one partition | `test_alarms_of_an_asset_share_one_partition` |
 | Alarm order and replay in ThingsBoard | `test_alarm_ordering_and_replay_leave_exactly_one_alarm_per_alarm_id` |
 | Backlog delivered to ThingsBoard without a drop | `test_a_backlog_of_one_asset_reaches_thingsboard_without_a_drop` |
@@ -600,6 +603,7 @@ These checks are in `tests/integration/conftest.py`.
 | ThingsBoard 4.2.1.1 | The version the course installation was running; Phase 0 pinned it as found, since the course compose left it untagged. | — | `docs/internal/phase0_diagnostic_report.md:320` |
 | One alarm engine, outside ThingsBoard | A constraint decided in Phase 2: thresholds, persistence and hysteresis are evaluated only in the alarm consumer; ThingsBoard displays alarm state. | The course rule chain `CreateAndClearAlarms`, with its own temperature threshold, retired | `docs/internal/claude_code_briefings/phase3_briefing_quantified_evidence.md:76`; `scripts/thingsboard/import_rule_chains.py` |
 | At-least-once with deterministic `alarm_id`, not Kafka transactions | A transaction cannot cover the in-memory state, which is rebuilt from `telemetry.alarms` anyway; duplicates are deduplicated by `alarm_id`. | Kafka transactions | `processing/alarm_consumer/consumer.js` |
+| Replay guard by the `ts` of each alarm's latest event | A replay after a restore re-evaluated samples the alarm's latest event already accounted for (section 6). The guard fixes it inside the alarm consumer, with no schema or topic change, whatever caused the replay (a crash, a reset of the group's offsets, a new group). | A guard by `seq` (the simulator restarts it at 0); saving each asset's position and counters (a new topic or schema, kept consistent with the offset commit); committing offsets after every message (slower, and covers crashes only) | `processing/alarm_consumer/state_machine.js`; `docs/internal/phase3_fix_h3_step0_report.md`; `tests/integration/test_restore_replay.py` |
 | `telemetry.alarms` compacted and keyed by `alarm_id`, partitioned by asset | Compaction keeps the latest event per alarm for the restore; per-asset order for AlarmMapping. | Default partitioner (by the whole `alarm_id`) | `processing/alarm_consumer/consumer.js`; `test_alarms_of_an_asset_share_one_partition` |
 | Avro with Schema Registry, `BACKWARD` compatibility | Producers and consumers in two languages share one contract; incompatible registrations are rejected. | — | `schemas/README.md`, `broker/kafka/provision.py` |
 | Dead-letter send failure: the bridge carries on, the consumer stops | The source decides: an MQTT message cannot be fetched again, a Kafka offset can be re-read. | The same policy in both | `bridge/mqtt_to_kafka/__main__.py`, `processing/alarm_consumer/consumer.js` |
@@ -614,7 +618,7 @@ Written with the same weight as the capabilities. Items marked "backlog" are rec
 
 **Alarm logic**
 
-1. **Spurious CLEARED after a restore and a replay** (known defect, section 6). ThingsBoard then shows an active alarm as cleared for the rest of its duration. Backlog, to be fixed before the repository goes public.
+1. **The replay guard trusts the producers' clocks** (section 6). If a producer's clock goes back, an alarm ignores that asset's samples stamped before its latest event, so it neither raises nor clears until the time passes it. The skipped samples are counted on `run_finished`.
 2. **The restore rebuilds states, not counters.** A raise or clear in progress at a stop can come later than it would have without the restart, by up to `persistence_samples − 1` samples (section 6). Read from the code.
 3. **One alarm consumer instance only.** The state is in memory per asset and is rebuilt only at start-up. A second instance in the same consumer group would take some partitions of `telemetry.raw` without their state, and a rebalance would move assets between instances the same way. Nothing in the code prevents it. Backlog.
 

@@ -1,6 +1,8 @@
 # Task 3.4, hallazgo H3: resultado del test de reproceso tras la reconstrucción
 
-Estado: resultado verificado, antes de escribir la sección 6 ("Alarm logic") de `docs/ARCHITECTURE.md`, como pidió Anthony en la aprobación del DETENTE 3.4.a. Sin cambios en el producto.
+Estado (2026-10-13): **defecto corregido**, junto con un segundo defecto encontrado durante la corrección; ver `docs/internal/phase3_fix_h3_result.md`. Los tests de `tests/integration/test_restore_replay.py` ya no fijan el defecto: exigen el comportamiento correcto. Lo que sigue es el resultado del 2026-10-12, sin cambios salvo la corrección de la sección "Condiciones y alcance".
+
+Estado original: resultado verificado, antes de escribir la sección 6 ("Alarm logic") de `docs/ARCHITECTURE.md`, como pidió Anthony en la aprobación del DETENTE 3.4.a. Sin cambios en el producto.
 
 ## Pregunta
 
@@ -50,7 +52,7 @@ Pasaron los 2 tests en 141 s. Al cerrar la sesión: cola PipelineSequential con 
 - Hace falta que el tramo sin confirmar contenga, antes de las muestras que levantaron la alarma, al menos `persistence_samples` muestras seguidas del mismo activo por debajo de umbral − histéresis.
 - Con consumo en vivo los lotes suelen ser pequeños. Al ponerse al día con un backlog, por ejemplo tras un reinicio, los lotes son grandes.
 - No he medido con qué frecuencia ocurre. El test fuerza el estado moviendo el offset, no matando el proceso a mitad de lote.
-- El caso contrario no tiene efecto visible: una alarma ya borrada que se reprocesa repite RAISED y CLEARED con el mismo `alarm_id`. ThingsBoard los descarta como duplicados y la reconstrucción ve CLEARED.
+- ~~El caso contrario no tiene efecto visible~~ **Corregido el 2026-10-13:** esa afirmación solo vale si el levantamiento de la alarma también está en lo reprocesado; entonces se repiten RAISED y CLEARED con el mismo `alarm_id` y ThingsBoard los descarta. Si la alarma se levantó en un lote ya confirmado y se borró en uno sin confirmar, la reconstrucción la deja NORMAL y el reproceso de sus muestras altas la levanta otra vez con un `alarm_id` nuevo y la borra: una alarma fantasma en ThingsBoard y una clave de más en `telemetry.alarms`. Se encontró durante la corrección de H3 (`docs/internal/phase3_fix_h3_step0_report.md`, sección 3) y se corrigió con ella (`docs/internal/phase3_fix_h3_result.md`).
 
 ## Qué se hace con él (decisión de Anthony)
 

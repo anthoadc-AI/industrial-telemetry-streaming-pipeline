@@ -24,7 +24,7 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 1.4 | Cinco activos, cuatro canales, modelo físico | `config/telemetry.yaml` (`assets`, `channels`); `edge/simulator/model.py` | cfg, cód |
 | 1.5 | Dos modos de fallo: `bearing_overheating` (rampa, temperatura) e `imbalance` (escalón, vibración) | `config/telemetry.yaml:95-113` | cfg |
 | 1.6 | Umbrales elegidos para los datos sintéticos; temperatura y corriente ilustrativos; vibración coincide con límites de zona de una norma (ver 6.17) | `config/alarms.yaml:3-14` | cfg |
-| 1.7 | `synthetic` en cada registro de telemetría y de alarma; `injected_fault` | `schemas/telemetry_v1.avsc`, `schemas/alarm_v1.avsc`; `edge/simulator/__main__.py:239-241`; `state_machine.js:114` (`synthetic` en el evento) | cód |
+| 1.7 | `synthetic` en cada registro de telemetría y de alarma; `injected_fault` | `schemas/telemetry_v1.avsc`, `schemas/alarm_v1.avsc`; `edge/simulator/__main__.py:239-241`; `state_machine.js:144` (`synthetic` en el evento) | cód |
 | 1.8 | Punto de partida: el trabajo del Módulo 24 de un curso de MIT xPRO, en el tag `v0-coursework`; contenido de sus tres carpetas | `git show v0-coursework` (mensaje del tag y del commit `aac0d8c`); `git ls-tree -r --name-only v0-coursework`; `Project_24_MQTT/paho-mqtt/TBpublish.py:23` en el tag (`random.randint`) | git |
 | 1.9 | `bench/` es el arnés del benchmark, no parte del pipeline; resultados y reporte | `bench/__init__.py:1`; `bench/results/README.md:1-3`; `docs/internal/phase3_task3.3_closure_report.en.md:1-5` | cód, int |
 
@@ -38,7 +38,7 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 2.4 | Las seis reglas de validación; sin comprobación de rango, y por qué | `bridge/mqtt_to_kafka/validation.py:1-23` | cód |
 | 2.5 | Avro vía Schema Registry a `telemetry.raw`, clave `asset_id` | `bridge/mqtt_to_kafka/__main__.py:1-12` | cód |
 | 2.6 | Lo inválido va a `telemetry.dlq` intacto, con clave del activo del topic MQTT; códigos de razón | `bridge/mqtt_to_kafka/__main__.py:9-12`, `360`, `387-428`; `validation.py` (`invalid_json`, `invalid_ts`, `schema_mismatch`, `non_finite_value`, `topic_mismatch`) | cód |
-| 2.7 | Las cartas muertas del consumer: indecodible y `missing_field` | `processing/alarm_consumer/consumer.js:30-44`, `217-245`; `test_dead_letters_real` | cód, test |
+| 2.7 | Las cartas muertas del consumer: indecodible y `missing_field` | `processing/alarm_consumer/consumer.js:30-44`, `224-252`; `test_dead_letters_real` | cód, test |
 | 2.8 | El sink: entrada de telemetría con el `ts` de la muestra; evento de alarma bajo `alarm_<channel>_<severity>`; `raised_ts` sacado del `alarm_id` | `processing/thingsboard_sink/__main__.py:14-23`, `135-157`; `test_sink_forwards_telemetry_with_the_sample_timestamps` | cód, test |
 | 2.9 | Un dispositivo por activo, creado con su tipo, y por tanto con su perfil | `processing/thingsboard_sink/__main__.py:9-12`, `237-245`; `test_sink_forwards_telemetry_with_the_sample_timestamps` | cód, test |
 | 2.10 | La Root Rule Chain guarda y pasa a AlarmMapping. AlarmMapping no evalúa umbrales; regla de aplicación; `alarm_last` | `scripts/thingsboard/import_rule_chains.py:8-14`; `processing/thingsboard/rule-chains/alarm-mapping.json:57` | cód |
@@ -54,7 +54,7 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 5.3 | La DLQ del sink va con clave `alarm_id` | `processing/thingsboard_sink/__main__.py:379` (`key=msg.key()` de `telemetry.alarms`) | cód |
 | 5.4 | Valores por defecto del broker en vigor | ver "Consulta en vivo" al final | vivo |
 | 5.5 | `telemetry.raw` y `telemetry.alarms` sin ajustes de topic aparte de `cleanup.policy` | ver "Consulta en vivo" (overrides dinámicos) | vivo |
-| 5.6 | Clave `alarm_id`, partición por `asset_id` con murmur2; por qué; los dead letters siguen la misma regla | `processing/alarm_consumer/consumer.js:328-382` (`assetOfKey`, `AssetPartitioner`, `createProducer`); `test_alarms_of_an_asset_share_one_partition` | cód, test |
+| 5.6 | Clave `alarm_id`, partición por `asset_id` con murmur2; por qué; los dead letters siguen la misma regla | `processing/alarm_consumer/consumer.js:335-389` (`assetOfKey`, `AssetPartitioner`, `createProducer`); `test_alarms_of_an_asset_share_one_partition` | cód, test |
 | 5.7 | La compactación no acota por tiempo (segmento activo) | `docs/internal/phase3_backlog.md:11` (verificado el 2026-10-02); `tests/integration/test_restore_compaction.py:1-30` | int, test |
 | 5.8 | El test ajusta los valores del cleaner solo para él y rueda las particiones | `tests/integration/test_restore_compaction.py:37-38`, `83` | test |
 | 5.9 | Sujeto `<topic>-value`; compatibilidad global BACKWARD, fijada y releída | `schemas/README.md:3-5`; `broker/kafka/provision.py:12-16`, `37`, `99` | cód |
@@ -65,22 +65,25 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 
 | # | Afirmación | Evidencia | Tipo |
 |---|---|---|---|
-| 6.1 | HI y HIHI independientes, cada una con su estado y su `alarm_id` | `processing/alarm_consumer/state_machine.js:3-12`, `44-62`, `120-130` | cód |
+| 6.1 | HI y HIHI independientes, cada una con su estado y su `alarm_id` | `processing/alarm_consumer/state_machine.js:3-12`, `60-84`, `150-158` | cód |
 | 6.2 | Tablas de umbrales | `config/alarms.yaml:25-54`; `test_architecture_doc.py::test_threshold_tables_match_alarms_config` | cfg, test |
 | 6.3 | `speed_rpm` sin alarma | `config/alarms.yaml:23` | cfg |
-| 6.4 | Transiciones NORMAL/ACTIVE con persistencia e histéresis | `state_machine.js:13-21`, `64-92`; `tests/unit/state_machine.test.js` | cód, test |
-| 6.5 | Rupturas de racha: hueco o retroceso de `seq`, valor nulo o no finito; contadores a cero, estado sin cambio | `state_machine.js:27-31`, `152-170`; `state_machine.test.js` | cód, test |
+| 6.4 | Transiciones NORMAL/ACTIVE con persistencia e histéresis | `state_machine.js:13-21`, `86-114`; `tests/unit/state_machine.test.js` | cód, test |
+| 6.5 | Rupturas de racha: hueco o retroceso de `seq`, valor nulo o no finito; contadores a cero, estado sin cambio | `state_machine.js:27-31`, `185-214`; `state_machine.test.js` | cód, test |
 | 6.6 | Sin debounce temporal ni limpieza periódica | `state_machine.js:22-25` | cód |
-| 6.7 | `alarm_id` determinista | `state_machine.js:33-35`, `40-42` | cód |
-| 6.8 | Reconstrucción: lee hasta los offsets finales, 60 s como máximo, último evento por clave, tombstone borra, RAISED → ACTIVE | `consumer.js:88`, `153-200`; `state_machine.js:95-99`, `134-146`; `processing/alarm_consumer/index.js:163-173`; `test_restore_after_real_compaction` | cód, test |
-| 6.9 | `alarms_restored`, `restored_alarm_without_rule`, `state_restore_failed` | `index.js:168-171` | cód |
-| 6.10 | No reconstruye contadores ni último `seq`; un levantamiento o borrado puede retrasarse hasta `persistence_samples − 1` muestras | `state_machine.js:95-99` (`resetCounters`), `152-156` (`lastSeq` indefinido al arrancar). **Sin test** | cód |
-| 6.11 | Defecto: CLEARED espurio tras restaurar y reprocesar; qué queda en `telemetry.alarms` y en ThingsBoard | `tests/integration/test_restore_replay.py` (los dos tests); `docs/internal/phase3_task3.4_h3_result.md` | test |
-| 6.12 | Commit de offsets al volver los handlers del lote | `consumer.js:9-14`, `262` | cód |
-| 6.13 | Una alarma ya borrada que se reprocesa no tiene efecto visible | AlarmMapping, `alarm-mapping.json:57` (descarta lo que no sea más nuevo, salvo el CLEARED de la misma alarma). **Sin test específico** | cód |
+| 6.7 | `alarm_id` determinista | `state_machine.js:33-35`, `56-58` | cód |
+| 6.8 | Reconstrucción: lee hasta los offsets finales, 60 s como máximo, último evento por clave, tombstone borra; después el último evento por tipo de alarma, RAISED o CLEARED; RAISED → ACTIVE, CLEARED → NORMAL (corrección H3) | `consumer.js:88`, `153-207`; `state_machine.js:116-128`, `165-179`; `processing/alarm_consumer/index.js:166-176`; `tests/unit/consumer.test.js` (`readAlarmState`); `test_restore_after_real_compaction` | cód, test |
+| 6.9 | `alarms_restored`, `restored_alarm_without_rule`, `state_restore_failed` | `index.js:171-174` | cód |
+| 6.10 | No reconstruye contadores ni último `seq`; un levantamiento o borrado puede retrasarse hasta `persistence_samples − 1` muestras; el guarda no lo cambia | `state_machine.js:127` (`resetCounters` en `restoreFrom`), `185-189` (`lastSeq` indefinido al arrancar); `docs/internal/phase3_fix_h3_step0_report.md`, sección 4. **Sin test** | cód, int |
+| 6.11 | Corregido: CLEARED espurio tras restaurar y reprocesar (H3, encontrado en la revisión) y alarma fantasma tras reprocesar una alarma borrada (encontrado durante la corrección); los tres tests fallan con el código anterior y pasan con la corrección | `tests/integration/test_restore_replay.py` (los tres tests); `docs/internal/phase3_task3.4_h3_result.md`; `docs/internal/phase3_fix_h3_result.md` (las dos ejecuciones); commit `4b87a8d` | test, int |
+| 6.12 | Commit de offsets al volver los handlers del lote | `consumer.js:9-14`, `269` | cód |
+| 6.13 | ~~Una alarma ya borrada que se reprocesa no tiene efecto visible~~ **Afirmación retirada el 2026-10-13: era falsa** si la alarma se levantó en un lote confirmado (alarma fantasma, fila 6.11). El documento la sustituye por la descripción del defecto corregido | `test_replay_of_a_clear_does_not_raise_a_phantom_alarm`; `docs/internal/phase3_fix_h3_step0_report.md`, sección 3 | test, int |
 | 6.14 | Tipo de alarma `<label> high (warning|critical)` | `processing/thingsboard_sink/__main__.py:144-146` | cód |
 | 6.15 | Rama Failure → `alarm_mapping_failed`, sin retener al activo | `alarm-mapping.json:198`; `test_a_mapping_failure_is_recorded_and_does_not_hold_back_the_asset` | cód, test |
 | 6.16 | Reconciliación en `make up` | `Makefile:84-87`; `scripts/thingsboard/import_rule_chains.py:522-555`; `test_make_up_reconciliation_clears_an_alarm_lost_with_kafka` | cód, test |
+| 6.18 | Guarda de reproceso: una muestra con `ts` igual o anterior al último evento de la alarma no cuenta para ella; el corte de `seq` sigue poniendo los contadores a cero; por `ts` y no por `seq` porque el simulador reinicia `seq` en 0 | `state_machine.js:37-51`, `76-78`, `130-131`, `192-200`; `edge/simulator/__main__.py:197`; `tests/unit/state_machine.test.js` (`replay guard`) | cód, test |
+| 6.19 | Contador `samples_skipped_by_replay_guard` por activo y canal en `run_finished` | `state_machine.js:209-219`; `index.js:128-131`; `test_replay_before_the_raise_does_not_clear_the_restored_alarm`, `test_replay_of_a_clear_does_not_raise_a_phantom_alarm` (`skipped`) | cód, test |
+| 6.20 | Coste del guarda: si el reloj de un productor retrocede, la alarma ignora esas muestras (ni levanta ni borra) hasta que el tiempo pasa su último evento | `tests/unit/state_machine.test.js` (`a ts going back ...`, dos tests) | test |
 | 6.17 | Los umbrales de vibración (4.5 y 7.1 mm/s RMS) coinciden con los límites de zona B/C y C/D de ISO 20816-3 (antes ISO 10816-3), Grupo 2 (15 kW a 300 kW), soportes flexibles; en soportes rígidos, 2.8 y 4.5 mm/s; sin fuente registrada al elegirlos | **Referencia externa, no evidencia del repositorio.** Afirmación aprobada por el dueño del proyecto (DETENTE 3.4.b) y comprobada contra fuentes secundarias que reproducen las tablas A.1 y A.2 de la norma; no se consultó el texto de la propia norma, que no está en el repositorio. En el repo solo constan los valores (`config/alarms.yaml:34-35`) y el comentario que repite esta afirmación (`config/alarms.yaml:7-14`) | ext |
 
 ## 7. Garantías de entrega
@@ -97,9 +100,9 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 7.8 | Id de cliente con el pid; se repite en contenedor | `__main__.py:144`; `docker-compose.yml:258` (`init: true`); `phase3_backlog.md:14` | cód, int |
 | 7.9 | Reconexión automática y nueva suscripción en cada conexión | `__main__.py:330-331` | cód |
 | 7.10 | Esas pérdidas no aparecen en `$SYS/.../dropped` | `docs/internal/phase3_backlog.md:14` | int |
-| 7.11 | Orden en el consumer: decodificar, estado, `send` esperado, retorno del handler | `consumer.js:7-14`, `300-317` | cód |
-| 7.12 | Fallo de envío: el consumer se para sin commit y sale con 1; reintentos del consumer desactivados | `consumer.js:14-19`, `254-258`; `index.js:22-24`; `test_offset_not_committed_when_handler_throws` | cód, test |
-| 7.13 | Schema Registry transitorio: nunca a la DLQ | `consumer.js:35-39`, `202-216`; `test_schema_registry_down` | cód, test |
+| 7.11 | Orden en el consumer: decodificar, estado, `send` esperado, retorno del handler | `consumer.js:7-14`, `307-324` | cód |
+| 7.12 | Fallo de envío: el consumer se para sin commit y sale con 1; reintentos del consumer desactivados | `consumer.js:14-19`, `261-265`; `index.js:22-24`; `test_offset_not_committed_when_handler_throws` | cód, test |
+| 7.13 | Schema Registry transitorio: nunca a la DLQ | `consumer.js:35-39`, `209-223`; `test_schema_registry_down` | cód, test |
 | 7.14 | Duplicados con el mismo `alarm_id` y la misma clave; por qué no transacciones | `consumer.js:21-28` | cód |
 | 7.15 | El sink guarda el offset tras el PUBACK; commit automático de lo guardado | `processing/thingsboard_sink/__main__.py:38-45`, `291-293`, `225-235`, `420` | cód |
 | 7.16 | El PUBACK no significa que el motor de reglas lo procesara | `thingsboard_sink/__main__.py:40-43` | cód |
@@ -117,14 +120,15 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 8.2 | Bridge más lento que su entrada | `test_a_paused_bridge_loses_nothing`, `test_an_overflow_is_logged_with_its_count` | test |
 | 8.3 | Payload inválido | `test_dead_letters_real` | test |
 | 8.4 | Fallo al enviar a la DLQ (bridge) | `__main__.py:18-25`; `test_bridge_dead_letter_send_failure_real` | cód, test |
-| 8.5 | Kafka inalcanzable al arrancar: los tres se niegan a arrancar | bridge `__main__.py:14-16`; consumer `index.js:8`, `143-161`; sink `thingsboard_sink/__main__.py:300`, `305` y `65-66`. **Sin test** | cód |
+| 8.5 | Kafka inalcanzable al arrancar: los tres se niegan a arrancar | bridge `__main__.py:14-16`; consumer `index.js:8`, `146-164`; sink `thingsboard_sink/__main__.py:300`, `305` y `65-66`. **Sin test** | cód |
 | 8.6 | Kafka no disponible en marcha (bridge): `delivery.timeout.ms`; la cola interna crece sin límite (H2) | `__main__.py:188`, `304-321`, `345`. **Sin test** | cód |
 | 8.7 | Fallo al enviar una alarma | `test_offset_not_committed_when_handler_throws` | test |
 | 8.8 | Schema Registry caído (consumer) | `test_schema_registry_down` | test |
 | 8.9 | Schema Registry caído (sink) | `thingsboard_sink/__main__.py:47-51`, `159-174`, `415`. **Sin test** | cód |
 | 8.10 | Schema Registry caído tras el arranque (bridge): sin verificar | H11; ningún test | — |
 | 8.11 | Consumer parado: se acumula, reconstruye y reanuda | `test_restore_after_real_compaction` | test |
-| 8.12 | Consumer parado entre el envío y el commit | `test_replay_before_the_raise_emits_a_spurious_clear` | test |
+| 8.12 | Consumer parado entre el envío y el commit: el reproceso no repite, contradice ni inventa eventos | `test_replay_before_the_raise_does_not_clear_the_restored_alarm`, `test_replay_of_a_clear_does_not_raise_a_phantom_alarm` | test |
+| 8.12b | Reloj de un productor que retrocede | fila 6.20 | test |
 | 8.13 | ThingsBoard o el sink caídos: backlog, drenaje al límite por activo, alarmas nuevas detrás | `test_a_backlog_of_one_asset_reaches_thingsboard_without_a_drop`; `thingsboard_sink/__main__.py:28-35` | test, cód |
 | 8.14 | ThingsBoard reiniciado | `docker-compose.yml:180`. **Sin test** | cfg |
 | 8.15 | AlarmMapping no puede aplicar | `test_a_mapping_failure_is_recorded_and_does_not_hold_back_the_asset` | test |
@@ -156,10 +160,10 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | # | Afirmación | Evidencia | Tipo |
 |---|---|---|---|
 | 10.1 | Formato JSON común; lo que pasa por él | `common/jsonlog.py` (docstring); `common/jsonlog.js`; `tests/unit/test_jsonlog_equivalence.py` | cód, test |
-| 10.2 | Eventos por componente | bridge: `__main__.py:249`, `337`, `342`, `370`, `425`, `296`, `486-488`; `drop_monitor.py:82`, `93`. Consumer: `index.js:128-130`, `168-171`; `consumer.js:271`, `295`, `312`. Sink: `thingsboard_sink/__main__.py:219`, `223`, `334`, `370`, `383`, `415`, `430`, `466`. Importación: `import_rule_chains.py:280`, `540`, `552`, `555` | cód |
+| 10.2 | Eventos por componente | bridge: `__main__.py:249`, `337`, `342`, `370`, `425`, `296`, `486-488`; `drop_monitor.py:82`, `93`. Consumer: `index.js:128-133`, `171-174`; `consumer.js:278`, `302`, `319`. Sink: `thingsboard_sink/__main__.py:219`, `223`, `334`, `370`, `383`, `415`, `430`, `466`. Importación: `import_rule_chains.py:280`, `540`, `552`, `555` | cód |
 | 10.3 | Campos de latencia y sus relojes; error de truncado de 0 a 1 ms | `bridge/mqtt_to_kafka/__main__.py:56-80`; `consumer.js:46-66` | cód |
 | 10.4 | Monitor de descartes: línea base, aumento, reinicio, 25 s, se niega a arrancar | `drop_monitor.py:1-41`; `config/bridge.yaml:18-28`; `__main__.py:262`; `tests/unit/test_drop_monitor.py` | cód, cfg, test |
-| 10.5 | Avisos de arranque | `phase3_backlog.md:24-27`; `docs/internal/phase2_backlog.md:36`; `consumer.js:371-376` | int, cód |
+| 10.5 | Avisos de arranque | `phase3_backlog.md:24-27`; `docs/internal/phase2_backlog.md:36`; `consumer.js:378-383` | int, cód |
 
 ## 11. Verificación
 
@@ -181,7 +185,7 @@ Los valores de las tablas del documento (topics, umbrales, ajustes, versiones) l
 | 12.4 | ThingsBoard 4.2.1.1: la versión que corría el curso, fijada tal cual en la Fase 0 | `docs/internal/phase0_diagnostic_report.md:35`, `320`, `388` | int |
 | 12.5 | Un solo motor de alarmas | `docs/internal/claude_code_briefings/phase3_briefing_quantified_evidence.md:76`; `import_rule_chains.py:12-18` | int, cód |
 | 12.6 | Al menos una vez sin transacciones | `consumer.js:21-28` | cód |
-| 12.7 | Clave `alarm_id` y partición por activo | `consumer.js:338-358`; `test_alarms_of_an_asset_share_one_partition` | cód, test |
+| 12.7 | Clave `alarm_id` y partición por activo | `consumer.js:345-365`; `test_alarms_of_an_asset_share_one_partition` | cód, test |
 | 12.8 | Avro y BACKWARD | `schemas/README.md`; `provision.py:12-16` | cód |
 | 12.9 | Asimetría de la DLQ | `bridge/mqtt_to_kafka/__main__.py:18-25`; `consumer.js:40-44` | cód |
 | 12.10 | Sin comprobación de rango | `validation.py:18-20` | cód |
