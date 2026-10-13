@@ -55,24 +55,24 @@ flowchart TB
 
 ## Measured figures
 
-**Conditions.** One laptop: Docker Desktop on WSL 2, 8 vCPUs, each service pinned to its own vCPUs, every component
-on one host and one Docker network. Kafka is a single broker with replication factor 1, writing to tmpfs. Synthetic
+**Conditions.** One laptop: Docker Desktop on WSL 2 with 8 vCPUs, the services pinned to fixed vCPUs
+(`config/benchmark.yaml`), every component on one host and one Docker network. Kafka is a single broker with replication factor 1, writing to tmpfs. Synthetic
 messages of about 218 B. Each run measures a 300 s window; the five runs of each row are summarised as their median
 and, in brackets, the range across runs, in whole milliseconds. These figures say nothing about separate machines,
 real networks, a replicated disk-backed Kafka, or runs of hours.
 
 | Figure | Rate | Runs | p50 ms | p95 ms | p99 ms | Samples per run |
 |---|---|---|---|---|---|---|
-| Sample to record readable in Kafka (F1) | 50 msg/s | 5 | 7 (7-8) | 11 (11-12) | 13 (12-13) | 15000 |
+| Sample to record read from Kafka (F1) | 50 msg/s | 5 | 7 (7-8) | 11 (11-12) | 13 (12-13) | 15000 |
 | Sample to the alarm event acknowledged by Kafka (F2) | 50 msg/s | 5 | 35 (34-36) | 55 (52-56) | - | 300 |
-| Sample to record readable in Kafka (F1), at the sustained rate | 2000 msg/s | 5 | 6 (6-6) | 11 (10-16) | 26 (19-59) | 600000 |
+| Sample to record read from Kafka (F1), at the sustained rate | 2000 msg/s | 5 | 6 (6-6) | 11 (10-16) | 26 (19-59) | 600000 |
 
 - **Sustained throughput (F3): 2000 msg/s**, confirmed in 5 of 5 runs of 300 s, with the bridge logging every
   message at INFO, its default. The next step, 3000 msg/s, could not be measured validly: the load generator itself
   reached its CPU limit. No rate between the two was measured.
 - **F1** starts at the sample's scheduled instant, so a stall of the load generator counts as pipeline latency.
-  **F2** uses a fixed fault pattern and ends when Kafka acknowledges the alarm event, before ThingsBoard. With 300
-  samples per run, no p99 is given for it.
+  **F2** uses a fixed fault pattern and ends when Kafka acknowledges the alarm event, before ThingsBoard. The
+  report gives no p99 for it.
 - **ThingsBoard is not in these figures.** Its path is limited to 10 msg/s per asset by configuration, and its
   latency and ceiling were not measured.
 
@@ -119,7 +119,7 @@ Source: `make bench-report`, which regenerates these tables from `bench/results/
 
 **Requirements.** Docker with Compose v2 (Docker Desktop on Windows), Python 3.13 (`.python-version` pins 3.13.4),
 Node.js 24 (`.nvmrc` pins 24.16.0) and GNU Make. The targets run from Git Bash or PowerShell on Windows and from bash
-on Linux. About 3 GB of memory for the containers.
+on Linux.
 
 Copy `.env.example` to `.env` and set `TB_TENANT_PASSWORD` and `TB_SYSADMIN_PASSWORD` to the ThingsBoard CE public
 defaults that the file names (`tenant` and `sysadmin`).
@@ -154,7 +154,7 @@ start it again without `--fault` to see the alarms clear.
 
 ## Dashboard
 
-Captured on 2026-10-04 from the synthetic data, with the faults above.
+Captured on 2026-10-04 from the synthetic data, with the same two faults.
 
 ![Pipeline operations dashboard with three active alarms](docs/images/01_plant_fault_active.png)
 
@@ -218,8 +218,8 @@ Mosquitto, ThingsBoard, and Kafka", preserved unchanged at the tag `v0-coursewor
 
 ## Why this matters
 
-A machine that is degrading usually shows it in its vibration or temperature well before it fails, and a plant
-already collects those signals. What decides whether anyone acts in time is the path from the sensor to the
+A rotating machine that degrades shows it in signals a plant already collects: vibration, bearing temperature,
+motor current. What decides whether anyone acts in time is the path from the sensor to the
 operator: whether every sample arrives, in order, and whether an alarm means what it says. This repository is that
 path at small scale, with its guarantees written down, measured where they can be, and tested where they could fail.
 The [case study](docs/CASE_STUDY.md) discusses what it would take to apply it to a real plant.
