@@ -59,8 +59,8 @@ Items recorded during Phase 3 for a later task, with where they come from. Phase
 ## For Task 3.5 (README and presentation)
 
 - **Dashboard fullscreen: white space under the five rows of the Assets table** (owner, review of 2026-10-03 21:04). A minor presentation point; the plant view's rows scale with the window height.
-- **The imbalance fault changes only the vibration** (owner, same review). Temperature and current follow their normal drift during it. The README must describe the scope of the physical model: what each fault mode changes and what it does not.
-- **The owner's captures were taken at two different window heights** (owner, same review). Decide in 3.5 whether to repeat them at one height.
+- **Done in Task 3.5: the imbalance fault changes only the vibration** (owner, same review). The README's caption of the pump-01 capture and its alarm-logic section say what each fault changes. Original note: Temperature and current follow their normal drift during it. The README must describe the scope of the physical model: what each fault mode changes and what it does not.
+- **Closed 2026-10-13: the owner's captures were taken at two different window heights** (owner, same review). The three captures in `docs/images/` (2026-10-04) are 1078, 1078 and 1075 px high; the owner judged the difference negligible at DETENTE 3.5.a, and they are not repeated.
 
 ## For Task 3.6 (publication readiness)
 
