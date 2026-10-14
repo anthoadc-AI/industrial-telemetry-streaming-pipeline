@@ -20,8 +20,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import integration_support as it
-from test_thingsboard_sink import alarm_event, alarm_last, alarms_of, device, produce_alarm_events, sink_group_at, \
-    wait_until
+from test_thingsboard_sink import alarm_event, alarm_last, alarm_last_when, alarms_of, device, produce_alarm_events, \
+    sink_group_at, wait_until
 
 pytestmark = pytest.mark.full
 
@@ -106,8 +106,12 @@ def test_a_mapping_failure_is_recorded_and_does_not_hold_back_the_asset(stack, t
         assert [a["status"] for a in found] == ["CLEARED_UNACK"]  # applied after the failure
         assert alarms_of(tb, device(tb, "pump-01")["id"]["id"], {bad["alarm_id"]}) == []
         window = {"startTs": int(since * 1000), "endTs": int(time.time() * 1000) + 60_000}
-        points = tb.request("GET", f"{path}/values/timeseries", query={"keys": "alarm_mapping_failed", **window, "limit": 10})
-        [failure] = [json.loads(p["value"]) for p in points.get("alarm_mapping_failed", [])]
+
+        def failures():  # polled, like alarm_last: written by the rule chain, not by the call that made it visible
+            points = tb.request("GET", f"{path}/values/timeseries", query={"keys": "alarm_mapping_failed", **window, "limit": 10})
+            return [json.loads(p["value"]) for p in points.get("alarm_mapping_failed", [])] or None
+
+        [failure] = wait_until(failures, timeout=60) or []
         assert (failure["asset"], failure["alarm_id"], failure["alarm_type"]) == \
             ("pump-01", bad["alarm_id"], "Speed high (warning)")
         stats = stats_after(since)
@@ -131,8 +135,9 @@ def test_an_event_applied_again_after_a_partial_run_is_absorbed(stack, tb, log_d
     dev = device(tb, "compressor-01")["id"]["id"]
     active = lambda: [a for a in alarms_of(tb, dev, {raised["alarm_id"]}) if a["status"].startswith("ACTIVE")] or None  # noqa: E731
     [first] = wait_until(active)
-    # The partial run: alarm created, alarm_last not saved. Put alarm_last back as it was before this event.
-    last = alarm_last(tb, dev)
+    # The partial run: alarm created, alarm_last not saved. Put alarm_last back as it was before this event, once
+    # AlarmMapping has saved it: it saves alarm_last after creating the alarm (CI run 38486097882 read it too early).
+    last = alarm_last_when(tb, dev, lambda v: v.get("Speed high (warning)", {}).get("alarm_id") == raised["alarm_id"])
     before = {k: v for k, v in last.items() if k != "Speed high (warning)"}
     tb.request("POST", f"/api/plugins/telemetry/DEVICE/{dev}/attributes/SERVER_SCOPE", {"alarm_last": json.dumps(before)})
     it.gateway_publish([gateway_entry(raised)])  # the retry
