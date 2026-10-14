@@ -451,7 +451,7 @@ def active_pipeline_alarms(tb) -> list[dict]:
             for a in irc._pages(tb, f"/api/alarm/DEVICE/{d['id']['id']}", {"searchStatus": "ACTIVE"}):
                 if (a.get("details") or {}).get("alarm_id"):
                     found.append({"asset": d["name"], "type": a["type"], "alarm_id": a["details"]["alarm_id"],
-                                  "status": a["status"]})
+                                  "status": a["status"], "id": a["id"]["id"]})
     return found
 
 

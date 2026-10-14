@@ -17,6 +17,13 @@ statistics, read from its log); if AlarmMapping recorded a mapping failure
 (a test that provokes one removes it); or if a device of the configured asset
 types is on a profile that does not use PipelineSequential.
 
+A full-profile test that fails also clears, at its teardown, every pipeline
+alarm that became active in ThingsBoard during it, so a test that stops
+halfway does not leave an alarm for the next one (CI run 38486097882: a test
+stopped before clearing its alarm, and the next test's reconciliation found
+it). A test that passes is left alone: an alarm it leaves active is still
+caught by the session-end check above.
+
 Options:
   --stack-profile core|full   core: Mosquitto, ZooKeeper, Kafka, Schema Registry
                               full: core plus ThingsBoard and the rule-chain import
@@ -34,6 +41,7 @@ import integration_support as it
 from proc_isolation import stop_leftover_processes  # noqa: F401  (autouse fixture)
 
 TOPICS = ("telemetry.raw", "telemetry.alarms", "telemetry.dlq")
+FAILED = pytest.StashKey[bool]()
 
 
 def pytest_addoption(parser):
@@ -54,6 +62,35 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(skip)
     if config.getoption("--reverse-order"):
         items.reverse()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    if report.when in ("setup", "call") and report.failed:
+        item.stash[FAILED] = True
+    return report
+
+
+@pytest.fixture(autouse=True)
+def clear_alarms_of_a_failed_test(request):
+    """Full profile: after a failed test, clear the pipeline alarms that became active in ThingsBoard during it."""
+    if "full" not in request.keywords or request.config.getoption("--stack-profile") != "full":
+        yield
+        return
+    request.getfixturevalue("stack")
+    tb = it.thingsboard()
+    before = {a["id"] for a in it.active_pipeline_alarms(tb)}
+    yield
+    if not request.node.stash.get(FAILED, False):
+        return
+    tb = it.thingsboard()  # a new login: the test may have outlived the token
+    left = [a for a in it.active_pipeline_alarms(tb) if a["id"] not in before]
+    for a in left:
+        tb.request("POST", f"/api/alarm/{a['id']}/clear")
+    if left:
+        request.config.stack_report.setdefault("alarms_cleared_after_failure", []).extend(
+            f"{request.node.name}: {a['asset']} {a['type']} {a['alarm_id']}" for a in left)
 
 
 @pytest.fixture(scope="session")
@@ -164,3 +201,5 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             + (f" pipeline_queue: {report['pipeline_queue']} mapping_failures={report['mapping_failures']}"
                f" devices_off_queue={report['devices_off_queue']}" if "pipeline_queue" in report else "")
             + (f" active_pipeline_alarms={report['active_pipeline_alarms']}" if "active_pipeline_alarms" in report else ""))
+        for line in report.get("alarms_cleared_after_failure", []):
+            terminalreporter.write_line(f"alarm cleared after a failed test: {line}")

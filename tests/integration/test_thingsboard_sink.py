@@ -4,6 +4,12 @@ ThingsBoard keeps its data in a named volume across sessions, so every assertion
 wrote: alarms by the alarm_id in their details, telemetry by time window, statistics by period timestamps.
 Alarm timestamps generated here are in the future relative to any earlier run, because AlarmMapping applies an
 alarm only if it is newer than the last one it applied for that device and type.
+
+alarm_last is read with alarm_last_when, never once: AlarmMapping creates or clears the alarm first and saves
+alarm_last after it (nodes "Create alarm" or "Clear alarm", then "Save alarm_last"), so an alarm can be visible
+before alarm_last says so. Found in CI run 38486097882 on main: a test read alarm_last once, right after its alarm
+became active, found no attribute yet and stopped halfway; the alarm it left active then failed the next test and
+the session-end check.
 """
 
 from __future__ import annotations
@@ -240,11 +246,11 @@ def test_alarm_ordering_and_replay_leave_exactly_one_alarm_per_alarm_id(stack, t
         active = sum(a["status"].startswith("ACTIVE") for a in alarms)
         assert settled, f"after the {name} pass: {len(alarms)} alarms for {len(ids)} alarm_ids, {active} active"
         assert sorted(a["details"]["alarm_id"] for a in alarms) == sorted(ids)  # exactly one per alarm_id
-    attr = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{pump['id']['id']}/values/attributes/SERVER_SCOPE",
-                      query={"keys": "alarm_last"})
-    last = json.loads(attr[0]["value"])
-    assert last[alarm_type("WARNING")] == {"alarm_id": f"pump-02/vibration_rms_mm_s/WARNING/{base + 39_000}",
-                                                  "state": "CLEARED", "raised_ts": base + 39_000}
+    newest = {"alarm_id": f"pump-02/vibration_rms_mm_s/WARNING/{base + 39_000}", "state": "CLEARED",
+              "raised_ts": base + 39_000}
+    last = alarm_last_when(tb, pump["id"]["id"], lambda v: v.get(alarm_type("WARNING")) == newest
+                           and v.get(alarm_type("CRITICAL"), {}).get("raised_ts") == base + 35_000)
+    assert last[alarm_type("WARNING")] == newest
     assert last[alarm_type("CRITICAL")]["raised_ts"] == base + 35_000
     for t in shared_ts:  # both alarm keys at the same timestamp: neither overwrote the other
         v = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{pump['id']['id']}/values/timeseries",
@@ -321,9 +327,17 @@ def test_alarm_start_time_is_the_event_time_not_the_arrival(stack, tb, log_dir, 
 
 
 def alarm_last(tb, device_id):
+    """The device's alarm_last attribute as it is now: {} if AlarmMapping has not saved one yet."""
     attr = tb.request("GET", f"/api/plugins/telemetry/DEVICE/{device_id}/values/attributes/SERVER_SCOPE",
                       query={"keys": "alarm_last"})
-    return json.loads(attr[0]["value"])
+    return json.loads(attr[0]["value"]) if attr else {}
+
+
+def alarm_last_when(tb, device_id, check, timeout=60):
+    """alarm_last once `check` holds for it, polled: AlarmMapping saves it after the alarm (module docstring)."""
+    last = wait_until(lambda: (lambda v: v if check(v) else None)(alarm_last(tb, device_id)), timeout=timeout)
+    assert last, f"alarm_last of {device_id} did not reach the expected value in {timeout} s: {alarm_last(tb, device_id)}"
+    return last
 
 
 def forward(log_dir, name, events):
@@ -362,6 +376,8 @@ def test_make_up_reconciliation_clears_an_alarm_lost_with_kafka(stack, tb, log_d
     it.provision()
     forward(log_dir, "recon-b", [alarm_event(y, asset, "CRITICAL", "RAISED", now + 1000, now + 1000)])
     [alarm_y] = one_active(y)
+    # The import reads and rewrites alarm_last: let AlarmMapping save Y's entry first.
+    alarm_last_when(tb, motor, lambda v: v.get(critical, {}).get("alarm_id") == y)
     # (c)
     result = it.run_module("scripts/thingsboard/import_rule_chains.py")
     assert result.returncode == 0, result.stderr[-800:]
@@ -386,7 +402,7 @@ def test_make_up_reconciliation_clears_an_alarm_lost_with_kafka(stack, tb, log_d
     assert alarm_z["id"] != ghost["id"] and alarm_z["type"] == warning and alarm_z["startTs"] == now + 2000
     [x_after] = alarms_of(tb, motor, {x})  # still one alarm for X, cleared, with its own start
     assert (x_after["id"], x_after["status"], x_after["startTs"]) == (ghost["id"], "CLEARED_UNACK", now)
-    assert alarm_last(tb, motor)[warning] == {"alarm_id": z, "state": "RAISED", "raised_ts": now + 2000}
+    alarm_last_when(tb, motor, lambda v: v.get(warning) == {"alarm_id": z, "state": "RAISED", "raised_ts": now + 2000})
     # Leave nothing active: Y and Z end through the pipeline, as any fault does.
     forward(log_dir, "recon-end", [alarm_event(y, asset, "CRITICAL", "CLEARED", now + 1000, now + 3000),
                                    alarm_event(z, asset, "WARNING", "CLEARED", now + 2000, now + 3000)])
