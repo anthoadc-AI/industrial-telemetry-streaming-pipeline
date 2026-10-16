@@ -14,29 +14,29 @@ Estado: **aprobado en el DETENTE 3.3.a (2026-10-06), con D1–D9 según la recom
 - Ninguno corriendo al empezar (`docker ps` vacío). Antes de cada celda de la sección 1, `run_matrix.py` vuelve a mirar `docker ps` y se detiene (exit 3) si ve algo que no sea del proyecto `industrial-telemetry` o de los propios diagnósticos (`bench-diag-*`). No se detuvo nunca.
 - Hay 19 contenedores parados, de otros cursos. No se tocaron. Política de reinicio (`docker inspect`, `HostConfig.RestartPolicy`):
 
-| Contenedor | Imagen | Proyecto compose | Restart | Parado desde |
+| Contenedor (nombre omitido) | Imagen | Proyecto compose | Restart | Parado desde |
 |---|---|---|---|---|
-| mosquitto-broker-1 | eclipse-mosquitto | mosquitto | no | 2026-08-24 |
-| bitnami-spark-worker-1 | bitnamilegacy/spark:3.5 | bitnami | no | 2026-07-23 |
-| bitnami-spark-1 | bitnamilegacy/spark:3.5 | bitnami | no | 2026-07-23 |
-| mysql | mysql:8.0 | — | no | 2026-07-04 |
-| nifi | apache/nifi:1.13.2 | — | no | 2026-07-04 |
-| some-cassandra | cassandra | — | no | 2026-07-02 |
-| some-mongo | mongo | — | no | 2026-07-02 |
-| mysqlactivity172 | mysql:8.0 | — | no | 2026-07-02 |
-| nificontainer | apache/nifi:1.13.2 | — | no | 2026-07-02 |
-| debeziummodule16 | debeziummodule16 | — | no | 2026-06-22 |
-| mysqlserver | mysqlmbtamasterimg | — | no | 2026-06-24 |
-| debeziumserver | debeziumimg | — | no | 2026-06-11 |
-| mysqlmasterdb | mysqlmasterimg | — | no | 2026-06-11 |
-| ubuntu_container | ubuntu | — | no | 2026-06-08 |
-| final_assignment_part3 | redis | — | no | 2026-07-02 |
-| final_assignment | mysql:8.0 | — | no | 2026-05-22 |
-| cassandra-db | cassandra:latest | — | no | 2026-05-19 |
-| strapi-flights | node:20-alpine | flights-api | **unless-stopped** | 2026-05-18 |
-| hello | hello-world | — | no | 2026-05-07 |
+| otro-01 | eclipse-mosquitto | otro proyecto | no | 2026-08-24 |
+| otro-02 | bitnamilegacy/spark:3.5 | otro proyecto | no | 2026-07-23 |
+| otro-03 | bitnamilegacy/spark:3.5 | otro proyecto | no | 2026-07-23 |
+| otro-04 | mysql:8.0 | — | no | 2026-07-04 |
+| otro-05 | apache/nifi:1.13.2 | — | no | 2026-07-04 |
+| otro-06 | cassandra | — | no | 2026-07-02 |
+| otro-07 | mongo | — | no | 2026-07-02 |
+| otro-08 | mysql:8.0 | — | no | 2026-07-02 |
+| otro-09 | apache/nifi:1.13.2 | — | no | 2026-07-02 |
+| otro-10 | imagen local | — | no | 2026-06-22 |
+| otro-11 | imagen local | — | no | 2026-06-24 |
+| otro-12 | imagen local | — | no | 2026-06-11 |
+| otro-13 | imagen local | — | no | 2026-06-11 |
+| otro-14 | ubuntu | — | no | 2026-06-08 |
+| otro-15 | redis | — | no | 2026-07-02 |
+| otro-16 | mysql:8.0 | — | no | 2026-05-22 |
+| otro-17 | cassandra:latest | — | no | 2026-05-19 |
+| otro-18 | node:20-alpine | otro proyecto | **unless-stopped** | 2026-05-18 |
+| otro-19 | hello-world | — | no | 2026-05-07 |
 
-  Solo `strapi-flights` tiene política de reinicio (`unless-stopped`). Como se paró a mano, Docker no lo arranca solo, pero un `docker compose up` de su proyecto sí lo haría. Los contenedores de Airflow y Hadoop que menciona el briefing **no existen** en esta máquina porque Anthony los bajó el 2026-10-05 con `docker compose -p <proyecto> down`, sin `-v`, conservando sus volúmenes. Quedan sus imágenes (`apache/airflow:2.1.1`, `apache/airflow:2.3.0` y `bde2020/hadoop-*`) y sus volúmenes, de los proyectos `airflow-docker`, `airflow_assignment`, `airflow` y `docker-hadoop` (`docker volume ls`, comprobado el 2026-10-09).
+  Solo `otro-18` tiene política de reinicio (`unless-stopped`). Como se paró a mano, Docker no lo arranca solo, pero un `docker compose up` de su proyecto sí lo haría. Los contenedores de Airflow y Hadoop que menciona el briefing **no existen** en esta máquina porque Anthony los bajó el 2026-10-05 con `docker compose -p <proyecto> down`, sin `-v`, conservando sus volúmenes. Quedan sus imágenes (`apache/airflow:2.1.1`, `apache/airflow:2.3.0` y `bde2020/hadoop-*`) y sus volúmenes, de los proyectos `airflow-docker`, `airflow_assignment`, `airflow` y `docker-hadoop` (`docker volume ls`, comprobado el 2026-10-09).
 
 ### 0.3 Entorno
 
@@ -51,7 +51,7 @@ Estado: **aprobado en el DETENTE 3.3.a (2026-10-06), con D1–D9 según la recom
 | Kernel de la VM | 6.6.87.2-microsoft-standard-WSL2; cgroup v2, driver cgroupfs; overlayfs | `docker info` |
 | Distro WSL de usuario | ninguna (solo `docker-desktop`) | `wsl -l -v` |
 | Windows | 11 Home 10.0.26200 | `wsl --version` |
-| Plan de energía | "Acer" (`6d85d030-…`); estado mínimo del procesador 0 %, máximo 100 % (AC y batería) | `powercfg /getactivescheme`, `/query … PROCTHROTTLEMIN/MAX` |
+| Plan de energía | plan del fabricante (`6d85d030-…`); estado mínimo del procesador 0 %, máximo 100 % (AC y batería) | `powercfg /getactivescheme`, `/query … PROCTHROTTLEMIN/MAX` |
 | **Alimentación** | Batería en las pasadas 1 (sus 4 primeras celdas) y 3; **corriente alterna en la pasada 4 (la de referencia), en `bimodal-ac` y en las mediciones de reloj** | `SystemInformation.PowerStatus`, `GetSystemPowerStatus` y `Win32_Battery.BatteryStatus`, registrado antes y después de cada celda en `cells.jsonl` |
 | Resolución del temporizador de Windows | actual 1,0 ms (la más gruesa 15,625 ms, la más fina 0,5 ms) | `NtQueryTimerResolution`, en el resumen de cada celda del host |
 

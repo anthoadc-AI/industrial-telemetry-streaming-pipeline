@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-09-13 |
 | Machine | Windows 11 Home 10.0.26200, x64 |
-| Course root | `D:\Anthony\MITXpro\Data E. MITXPRO\Mod_24_Handling Big_Data_with_ Mosquitto_ ThingsBoard_ Kafka` |
+| Course root | the course folder on the owner's machine (local path omitted) |
 | Python (coursework interpreter) | 3.13.4 — `%USERPROFILE%\AppData\Local\Programs\Python\Python313\python.exe` (system install; **no venv exists**) |
 | Python packages | paho-mqtt 1.6.1, kafka-python 3.0.11, numpy 2.4.2 |
 | Node.js / npm | v24.16.0 / 11.13.0 |
