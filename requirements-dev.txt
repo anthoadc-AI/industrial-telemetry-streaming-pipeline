@@ -1,6 +1,5 @@
 # Development and test dependencies (pytest, coverage, ruff), on top of requirements.txt.
-# Exact pins; install into the same virtual environment:
-#   .venv/Scripts/python -m pip install -r requirements-dev.txt
+# Exact pins; make install installs it into the same .venv.
 pytest==9.1.1
 pytest-cov==7.1.0
 ruff==0.16.10

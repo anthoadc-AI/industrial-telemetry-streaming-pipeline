@@ -1,6 +1,7 @@
-# Python dependencies for the Phase 1 components (config loader, simulator,
-# bridge). Exact pins; install into a virtual environment:
-#   python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
+# Python dependencies of the pipeline (config loader, simulator, bridge,
+# ThingsBoard sink) and of the benchmark. Exact pins of direct dependencies
+# only. make install creates .venv and installs this file and
+# requirements-dev.txt.
 PyYAML==6.0.3
 paho-mqtt==2.1.0
 confluent-kafka[avro,schemaregistry]==2.15.1
