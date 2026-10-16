@@ -383,7 +383,7 @@ Each DETENTE is a pause point where Claude Code reports findings and waits for o
 - ThingsBoard dashboard export (if not completed in Phase 2)
 - Architecture diagram with data flows and message schemas
 - Final README with Problem-Action-Result structure, measured numbers only
-- Draft cover letter for hiring managers (optional, separate from repo)
+- Final review of the repository before publication
 
 ---
 

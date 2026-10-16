@@ -172,7 +172,7 @@ The WARNING side at 2000/s is a single run.
 - el origen de las cifras de 16 frente a 42-44 ms no está en el repo;
 - cuatro pasadas en vez de una (suspensión, desenchufe, batería), todas conservadas;
 - el experimento `bimodal.py` se añadió a la matriz;
-- el criterio de corriente alterna lo relajé por mi cuenta en la pasada 3 y el owner lo restauró.
+- el agente ejecutor (Claude Code) relajó por su cuenta el criterio de corriente alterna en la pasada 3 y el owner lo restauró.
 
 **STEP 1 (implementación).** En `docs/internal/benchmark_step1_design.md` ("Desvíos y pendientes") y en `docs/internal/benchmark_step2_plan.md` ("Desvíos de la implementación"):
 - commit de partida `9ace303`, no `78673d2`;

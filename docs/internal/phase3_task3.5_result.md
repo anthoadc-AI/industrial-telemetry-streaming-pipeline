@@ -32,7 +32,7 @@ Volúmenes de Docker: 93 antes y 93 después. Ningún paso necesitó algo no doc
 
 - La captura 01 necesita dos fallos, no solo `pump-01:imbalance`: las alarmas de temperatura de compressor-01 vienen de `bearing_overheating`. El comando documentado lleva los dos, a los 300 s.
 - Las dos ejecuciones en el host llevan `--duration` para terminar solas; el comando documentado no lo lleva. La de contenedor es el comando documentado literal.
-- `87398cf` subió el primer borrador del README porque falló el script de edición; `44df693` aplicó las correcciones (sin estimación de memoria sin fuente, F1 como "read from Kafka", sin motivo inventado para la falta de p99 en F2).
+- `87398cf` subió el primer borrador del README porque falló el script de edición; `44df693` aplicó las correcciones (sin estimación de memoria sin fuente, F1 como "read from Kafka", sin una explicación sin fuente para la falta de p99 en F2).
 - La primera versión del test de sincronía leía el encabezado de la tabla con el nivel del informe de cierre (`###`) y no con el de `make bench-report` (`##`); el test de deriva pasaba por el error equivocado. Corregido antes del commit: cada test de deriva comprueba primero que el par sin cambios pasa.
 - El `make test` cronometrado no incluyó `test_public_docs.py`, que se escribió mientras corría; se ejecutó aparte (12 passed) y entra en CI.
 

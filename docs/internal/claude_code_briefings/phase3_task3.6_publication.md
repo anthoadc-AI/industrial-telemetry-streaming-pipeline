@@ -46,8 +46,8 @@ haría un desconocido con criterio.
    un fork no tendría.
 7. **Tamaño.** Tamaño del clon y de los mayores archivos versionados.
 8. **Documentos internos.** `docs/internal/` es público. Revisa que ninguna
-   nota contenga datos personales, rutas locales o lenguaje que no quieras
-   que lea un reclutador; reporta las frases concretas, no las cambies.
+   nota contenga datos personales, rutas locales o lenguaje impropio de un
+   documento público; reporta las frases concretas, no las cambies.
 9. **Descripción y temas del repo.** Propón la descripción de una línea y
    los temas (topics) de GitHub, en inglés.
 
