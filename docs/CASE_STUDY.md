@@ -143,3 +143,5 @@ cannot be checked.
 
 These are the same habits a plant expects of its instruments: calibrate them, know their limits, and record what
 they say. Applied to the data path, they turn a set of connected tools into a system an operator can rely on.
+
+The project was executed with an AI coding agent (Claude Code) from written briefings kept in `docs/internal/claude_code_briefings/`; the design decisions, the reviews and the approval of every checkpoint were the author's.

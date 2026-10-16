@@ -215,6 +215,7 @@ The full list is in [section 13 of the architecture document](docs/ARCHITECTURE.
 
 The project started from the coursework of MIT xPRO Data Engineering, Module 24, "Handling Big Data with
 Mosquitto, ThingsBoard, and Kafka", preserved unchanged at the tag `v0-coursework`, and was rebuilt from there.
+The project was executed with an AI coding agent (Claude Code) from written briefings kept in `docs/internal/claude_code_briefings/`; the design decisions, the reviews and the approval of every checkpoint were the author's.
 
 ## Why this matters
 

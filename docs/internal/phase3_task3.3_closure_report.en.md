@@ -177,7 +177,7 @@ There are also 2 WARNING attempts without results (a harness failure, section 2.
 - the origin of the 16 against 42-44 ms figures is not in the repository;
 - four passes instead of one (suspend, unplugged, battery), all kept;
 - the `bimodal.py` experiment was added to the matrix;
-- I relaxed the AC-power criterion on my own in pass 3, and the owner restored it.
+- the executing agent (Claude Code) relaxed the AC-power criterion on its own in pass 3, and the owner restored it.
 
 **STEP 1 (implementation).** In `docs/internal/benchmark_step1_design.md` ("Desvíos y pendientes") and `docs/internal/benchmark_step2_plan.md` ("Desvíos de la implementación"):
 - starting commit `9ace303`, not `78673d2`;

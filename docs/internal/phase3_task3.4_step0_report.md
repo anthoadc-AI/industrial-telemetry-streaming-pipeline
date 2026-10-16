@@ -148,7 +148,7 @@ Un SVG exportado necesita una cadena de herramientas, no se puede revisar en un 
 
 Tres diagramas:
 1. **Flujo de datos** (`flowchart LR`), obligatorio. Borrador más abajo.
-2. **Secuencia de entrega y acks** (`sequenceDiagram`), recomendado. En un solo dibujo se ve dónde ocurre cada PUBACK, cada `acks=all` y cada commit de offset, y dónde se pierde un mensaje si un componente cae. Es la parte que un entrevistador va a preguntar.
+2. **Secuencia de entrega y acks** (`sequenceDiagram`), recomendado. En un solo dibujo se ve dónde ocurre cada PUBACK, cada `acks=all` y cada commit de offset, y dónde se pierde un mensaje si un componente cae. Es la garantía que más necesita un dibujo.
 3. **Estados de una alarma de nivel** (`stateDiagram-v2`), recomendado: NORMAL y ACTIVE con las condiciones de los contadores. Es pequeño y la tabla de umbrales no lo sustituye.
 
 **Comprobación del renderizado:**
