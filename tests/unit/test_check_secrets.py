@@ -28,12 +28,15 @@ HITS = {
     "secret-assignment": J(["FIREBASE_DB_", "SEC", "RET=abcdef"]),
     "long-token-assignment": J(["TB_ACCESS_", "TOKEN=", "A" * 24]),
     "user-home-path": J(["C:", "\\", "Users", "\\", "someone\\.mytb-data"]),
+    "drive-path": J(["D:", "\\", "someone", "\\", "repo\\bench\\harness.py"]),
 }
 CLEAN = [
     J(["FIREBASE_DB_", "SEC", "RET="]),
     J(["TB_ACCESS_", "TOKEN=DHT11_DEMO_TOKEN"]),
     "see https://api.example.com/users/42 and ~/.mytb-data",
     "%USERPROFILE%\\.mytb-data",
+    "a bare drive C:\\ and a string literal 's:\\n{logs(x)}'",
+    "file:///srv/x and http://h:8080/x",
 ]
 
 
@@ -50,6 +53,14 @@ def test_clean_lines_pass(text):
 @pytest.mark.parametrize("text", [J(["/c/", "Users/someone/x"]), J(["/", "home/someone/x"])])
 def test_other_home_path_forms(text):
     assert [h.rule for h in cs.scan("f.txt", text.encode())] == ["user-home-path"]
+
+
+@pytest.mark.parametrize("text", [
+    J(["E:", "/", "work/repo/x"]),
+    J(['File \\"D:', "\\\\", "someone", "\\\\", 'repo\\\\x.py\\"']),  # JSON-escaped, as in a logged traceback
+])
+def test_other_drive_path_forms(text):
+    assert [h.rule for h in cs.scan("f.txt", text.encode())] == ["drive-path"]
 
 
 def test_binary_files_are_skipped():

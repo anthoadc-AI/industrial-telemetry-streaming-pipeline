@@ -36,6 +36,12 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # skips URL paths on a host name.
     ("user-home-path", re.compile(r"\b[A-Za-z]:[\\/]+Users[\\/]+\w", re.I)),
     ("user-home-path", re.compile(r"(?<![\w.])/(?:[A-Za-z]/)?(?:Users|home)/\w", re.I)),
+    # Any other absolute drive-letter path with at least one directory, such
+    # as a working tree outside a user profile; doubled backslashes cover the
+    # JSON-escaped form a traceback takes in a log. Profile paths are left to
+    # user-home-path. Added after Task 3.6 STEP 0 found two the rules above
+    # missed (owner decision, DETENTE 3.6.a, 2026-10-15).
+    ("drive-path", re.compile(r"(?<![\w])[A-Za-z]:(?:\\{1,2}|/)(?!Users\b)[\w.\-]+(?:\\{1,2}|/)", re.I)),
 ]
 
 
