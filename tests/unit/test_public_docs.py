@@ -7,6 +7,9 @@
 - Every repository path cited in backticks exists (the rule of test_architecture_doc.py).
 - The README's architecture diagram is the one in docs/ARCHITECTURE.md, section 2.
 - The synthetic-data notice comes before any figure.
+- Every line citation (`path:line`) in the three public documents points at a line that still says what it was
+  cited for: CITED_LINES gives a short expected substring per citation (owner decision, DETENTE 3.6.a). A line
+  count alone let an edit above the cited line move the citation without failing.
 
 Out of scope: the CI figures of the README's "Verification" section (test counts, coverage). They come from a CI
 run's log and cannot be recomputed offline; docs/internal/phase3_task3.5_traceability.md gives their source.
@@ -36,6 +39,21 @@ FIGURE_ROWS = {
     ("Sample to record read from Kafka (F1)", "50 msg/s"): ("latency", "50", "F1 e2e"),
     ("Sample to the alarm event acknowledged by Kafka (F2)", "50 msg/s"): ("latency", "50", "F2 alarm"),
     ("Sample to record read from Kafka (F1), at the sustained rate", "2000 msg/s"): ("throughput", "2000", "F1 e2e"),
+}
+
+# (cited path, line) -> a substring the cited line must contain. Every line citation in the public documents has
+# an entry, and every entry is cited; for a range, the line is its last (cited_paths).
+CITED_LINES = {
+    ("docs/internal/phase3_backlog.md", 14): "A simulator QoS 1 acknowledgement means Mosquitto accepted the message",
+    ("docs/internal/phase0_diagnostic_report.md", 152): "**Confluent Platform version: 6.1.1**",
+    ("docs/internal/phase0_diagnostic_report.md", 218): "ZooKeeper reloaded a persisted `/brokers/ids/1` ephemeral znode",
+    ("docs/internal/phase0_diagnostic_report.md", 320): "**ThingsBoard version (resolves Q6)** | **v4.2.1.1**",
+    ("docs/internal/phase0_diagnostic_report.md", 473): "`node-rdkafka` incompatible with Node.js v24.",
+    ("docs/internal/claude_code_briefings/phase1_briefing_solid_base.md", 62): "Image pins: `thingsboard/tb-postgres:4.2.1.1`",
+    ("docs/internal/claude_code_briefings/phase2_briefing_engineering_quality.md", 29): "**Decision:** Node.js",
+    ("docs/internal/phase2_backlog.md", 14): "the alarm consumer is built in **Node.js** (kafkajs)",
+    ("docs/internal/phase2_backlog.md", 35): "**kafkajs maintenance risk**",
+    ("docs/internal/claude_code_briefings/phase3_briefing_quantified_evidence.md", 76): "**one alarm engine.**",
 }
 
 
@@ -128,6 +146,29 @@ def test_every_cited_path_exists(path):
             assert len(target.read_text(encoding="utf-8").splitlines()) >= line, f"{cited}:{line}"
 
 
+def line_citations(documents: list[Path]) -> set[tuple[str, int]]:
+    return {(cited, line) for doc in documents for cited, line in cited_paths(doc.read_text(encoding="utf-8"))
+            if line is not None}
+
+
+def stale_citations(expected: dict[tuple[str, int], str]) -> list[str]:
+    """Citations whose line no longer contains its expected substring (or no longer exists)."""
+    stale = []
+    for (cited, line), substring in expected.items():
+        lines = (REPO_ROOT / cited).read_text(encoding="utf-8").splitlines()
+        if len(lines) < line or substring not in lines[line - 1]:
+            stale.append(f"{cited}:{line}")
+    return stale
+
+
+def test_every_line_citation_has_an_expected_substring():
+    assert line_citations([README, CASE_STUDY, ARCHITECTURE]) == set(CITED_LINES)
+
+
+def test_every_cited_line_says_what_it_was_cited_for():
+    assert stale_citations(CITED_LINES) == []
+
+
 def test_the_readme_diagram_is_the_architecture_diagram(readme):
     (diagram,) = MERMAID.findall(readme)
     assert diagram == MERMAID.findall(ARCHITECTURE.read_text(encoding="utf-8"))[0]
@@ -162,6 +203,13 @@ def test_a_changed_throughput_is_caught(readme, report):
     assert drifted != report
     with pytest.raises(AssertionError):
         check_throughput(readme, drifted)
+
+
+def test_a_moved_citation_is_caught():
+    assert stale_citations(CITED_LINES) == []  # the unchanged pairs pass, so the failure below comes from the move
+    (cited, line), substring = next(iter(CITED_LINES.items()))
+    assert stale_citations({(cited, line + 1): substring}) == [f"{cited}:{line + 1}"]
+    assert stale_citations({(cited, 10**6): substring}) == [f"{cited}:{10**6}"]
 
 
 def test_slug_follows_github(tmp_path):
