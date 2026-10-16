@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Project | industrial-telemetry-streaming-pipeline |
-| Phase | 3 of 3, Quantified evidence |
+| Phase | 3, the last of four (0 to 3), Quantified evidence |
 | Briefings | `docs/internal/claude_code_briefings/phase3_briefing_quantified_evidence.md` (phase) and the task briefings in the same folder (3.3 STEP 0 to 2, 3.4, 3.5, the H3 fix, 3.6) |
 | Work dates | 2026-10-02 to 2026-10-15 |
 | Machine | Windows 11 Home 10.0.26200, Docker Desktop (Engine 29.0.1, WSL 2, 8 vCPUs and 12 GB for the VM), Python 3.13.4, Node.js 24.16.0, GNU Make 3.81 (GnuWin32) |
@@ -125,6 +125,8 @@ Benchmark conditions for every figure in this table: one laptop, Docker Desktop 
 
 The CI figures on the Task 3.6 branch are in section 7.
 
+The coverage figures were read from each run's log, as printed. Runs 38472910691 (`c576f2b`, the run the README cites), 38496923949 (`0604a08`) and 38829861901 (`8b1caf7`) print the same values: "Total coverage: 98.54%", "845/874 branches, 96.68 %", Node.js lines 100 % (1159/1159) and branches 98.7 % (305/309). Their unit test counts differ: 447, 459 and 467 Python; 119 Node.js in all three.
+
 ---
 
 ## 5. Deviations from the briefings
@@ -171,7 +173,7 @@ Open at closure. The source of each is `docs/internal/phase3_backlog.md` unless 
 
 ## 7. State at closure
 
-- `main` at `0604a08`, CI green on all four jobs (run 38496923949). The Task 3.6 branch `chore/phase3-publication` is pushed: CI run 38829861901 on `8b1caf7` (the last fix before this report): passed three jobs (lint and unit tests: 467 Python, 119 Node.js, "Total coverage: 98.54%", "845/874 branches, 96.68 %"; core stack: 16 passed, 16 skipped; pipeline in containers: smoke PASS); the full-stack job runs only on `main` and on a manual run, so it was skipped.
+- `main` at `0604a08`, CI green on all four jobs (run 38496923949). The Task 3.6 branch `chore/phase3-publication` is pushed: CI run 38829861901 on `8b1caf7` (the last fix before this report; figures read from its log): passed three jobs (lint and unit tests: 467 Python, 119 Node.js, "Total coverage: 98.54%", "845/874 branches, 96.68 %"; core stack: 16 passed, 16 skipped; pipeline in containers: smoke PASS); the full-stack job runs only on `main` and on a manual run, so it was skipped.
 - Tags: `v0-coursework`, `v1-solid-base`, `v2-engineering-quality`. `v3-quantified-evidence` waits for the owner's approval, on the merge of this branch.
 - Remote branches: `main`, and the Task 3.6 branch until its merge.
 - The repository is private. The owner makes it public, adds the description and topics proposed at DETENTE 3.6.a and checks the CI badge.

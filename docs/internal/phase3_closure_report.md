@@ -3,7 +3,7 @@
 | Campo | Valor |
 |---|---|
 | Proyecto | industrial-telemetry-streaming-pipeline |
-| Fase | 3 de 3, Evidencia cuantificada |
+| Fase | 3, la última de cuatro (0 a 3), Evidencia cuantificada |
 | Briefings | `docs/internal/claude_code_briefings/phase3_briefing_quantified_evidence.md` (fase) y los briefings de tarea de la misma carpeta (3.3 STEP 0 a 2, 3.4, 3.5, el arreglo de H3, 3.6) |
 | Fechas de trabajo | 2026-10-02 a 2026-10-15 |
 | Máquina | Windows 11 Home 10.0.26200, Docker Desktop (Engine 29.0.1, WSL 2, 8 vCPU y 12 GB para la VM), Python 3.13.4, Node.js 24.16.0, GNU Make 3.81 (GnuWin32) |
@@ -125,6 +125,8 @@ Condiciones del benchmark para todas las cifras de esta tabla: un portátil, Doc
 
 Las cifras de CI de la rama de la Task 3.6 están en la sección 7.
 
+Las cifras de cobertura se leyeron del log de cada ejecución, tal como se imprimen. Las ejecuciones 38472910691 (`c576f2b`, la que cita el README), 38496923949 (`0604a08`) y 38829861901 (`8b1caf7`) imprimen los mismos valores: "Total coverage: 98.54%", "845/874 branches, 96.68 %", líneas de Node.js 100 % (1159/1159) y ramas 98.7 % (305/309). Sus recuentos de tests unitarios difieren: 447, 459 y 467 de Python; 119 de Node.js en las tres.
+
 ---
 
 ## 5. Desvíos respecto a los briefings
@@ -171,7 +173,7 @@ Abierto al cierre. La fuente de cada punto es `docs/internal/phase3_backlog.md` 
 
 ## 7. Estado al cierre
 
-- `main` en `0604a08`, CI en verde en los cuatro jobs (ejecución 38496923949). La rama de la Task 3.6 `chore/phase3-publication` está subida: ejecución de CI 38829861901 sobre `8b1caf7` (el último arreglo antes de este informe): pasó tres jobs (lint y tests unitarios: 467 Python, 119 Node.js, "Total coverage: 98.54%", "845/874 branches, 96.68 %"; stack core: 16 pasados, 16 omitidos; pipeline en contenedores: smoke PASS); el job del stack completo solo corre en `main` y en una ejecución manual, así que se omitió.
+- `main` en `0604a08`, CI en verde en los cuatro jobs (ejecución 38496923949). La rama de la Task 3.6 `chore/phase3-publication` está subida: ejecución de CI 38829861901 sobre `8b1caf7` (el último arreglo antes de este informe; cifras leídas de su log): pasó tres jobs (lint y tests unitarios: 467 Python, 119 Node.js, "Total coverage: 98.54%", "845/874 branches, 96.68 %"; stack core: 16 pasados, 16 omitidos; pipeline en contenedores: smoke PASS); el job del stack completo solo corre en `main` y en una ejecución manual, así que se omitió.
 - Tags: `v0-coursework`, `v1-solid-base`, `v2-engineering-quality`. `v3-quantified-evidence` espera la aprobación del owner, sobre el merge de esta rama.
 - Ramas remotas: `main`, y la rama de la Task 3.6 hasta su merge.
 - El repositorio es privado. El owner lo hace público, añade la descripción y los temas propuestos en el DETENTE 3.6.a y comprueba la insignia de CI.
